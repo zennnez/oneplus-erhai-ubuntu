@@ -46,8 +46,10 @@ ${CXX:-g++} -O2 -g -std=c++20 -Wall -Wextra -Wpedantic \
 
 # The NPU statistics graph is generated so the shipped model always matches
 # its generator (the helper and the generator are shipped alongside it).
-python3 "$SRC/src/gen-cam-stats-onnx.py" \
-	"$SRC/usr/share/oneplus-erhai-erhaicam/erhai-cam-stats.onnx"
+if python3 -c "import onnx" 2>/dev/null; then
+	python3 "$SRC/src/gen-cam-stats-onnx.py" \
+		"$SRC/usr/share/oneplus-erhai-erhaicam/erhai-cam-stats.onnx"
+fi
 
 # Keep the helper that ships in the deb byte-identical to the source tree copy
 # the app's dev-tree lookup uses (src/) — no drift between dev and install.

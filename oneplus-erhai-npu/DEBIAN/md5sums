@@ -14,8 +14,8 @@ e96b4f1705fc10c6f9cf368e347a346b  usr/share/oneplus-erhai-npu/README.md
 939a270b0eb43150a6dc770be1029e36  var/lib/hexagonfs-cdsp/dsp/cdsp/fastrpc_shell_unsigned_3
 15b80d39d7d002d894226d7deff993c8  var/lib/hexagonfs-cdsp/dsp/cdsp/libbenchmark_skel.so
 82beefbcc2d0fb047307fe502923f1eb  var/lib/hexagonfs-cdsp/dsp/cdsp/libc++abi.so.1
-eb42daffe16aeec97e740cc1d71e2980  var/lib/hexagonfs-cdsp/dsp/cdsp/libcrm_test_skel.so
 5ed2f594557ce92c537454a7a3b2b035  var/lib/hexagonfs-cdsp/dsp/cdsp/libc++.so.1
+eb42daffe16aeec97e740cc1d71e2980  var/lib/hexagonfs-cdsp/dsp/cdsp/libcrm_test_skel.so
 6633c147a124f10526fe9953071b890c  var/lib/hexagonfs-cdsp/dsp/cdsp/libhcpfrc.so
 69d7dc9977b6c25c2e0a88a04541d3af  var/lib/hexagonfs-cdsp/dsp/cdsp/libhcp_rpc_skel.so
 41d4eaf7b7b61e30a6407b762110aa23  var/lib/hexagonfs-cdsp/dsp/cdsp/libloadalgo_skel.so
