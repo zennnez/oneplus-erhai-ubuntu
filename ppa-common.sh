@@ -46,6 +46,10 @@ DEB_DIR="${DEB_DIR:-$_PPA_COMMON_DIR/debs}"
 mkdir -p "$DEB_DIR"
 
 ppa_copy() {
+	if [ "${NO_PPA:-0}" = 1 ]; then
+		echo "NO_PPA=1: skipping PPA publish for $*"
+		return 0
+	fi
 	[ -n "$PPA_DEB_DIR" ] || {
 		echo "ppa-common: cannot locate themojoman.github.io (set PPA_DEB_DIR)" >&2
 		return 1
