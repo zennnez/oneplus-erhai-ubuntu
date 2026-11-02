@@ -33,31 +33,30 @@ for f in usr/local/sbin/erhai-cam-arm.sh \
 done
 
 # erhai-autofocus: GTK4 + GStreamer contrast autofocus driving the kernel
-# lens subdev. Compiled here so the deb always matches its shipped source.
-PKGS="gstreamer-app-1.0 gstreamer-video-1.0 gtk4"
-pkg-config --exists $PKGS || {
-	echo "missing pkg-config deps ($PKGS); install libgtk-4-dev," \
-	     "libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev" >&2
-	exit 1
-}
-mkdir -p "$SRC/usr/local/bin"
-# -fdebug-prefix-map/--ffile-prefix-map + the strip below: a -g build embeds the
-# ABSOLUTE build paths of THIS pad (workspace tree, tmp/gst-dev include dirs) in
-# the DWARF, and they shipped in 1.3's public .deb (personal-data audit
-# 2026-10-26, caught by ppa-guard.sh).  The shipped tool needs no debug info.
-${CXX:-g++} -O2 -g -std=c++20 -Wall -Wextra -Wpedantic \
-	-fdebug-prefix-map="$HERE"=. -ffile-prefix-map="$HERE"=. \
-	$(pkg-config --cflags $PKGS) \
-	-o "$SRC/usr/local/bin/erhai-autofocus" \
-	"$SRC/src/erhai-autofocus.cpp" \
-	$(pkg-config --libs $PKGS)
-# the shared scrub also refuses a payload that still carries the build path
-ppa_scrub_debug "$SRC"
+# lens subdev. Compiled here if not already present.
+if [ ! -x "$SRC/usr/local/bin/erhai-autofocus" ] || [ "${REBUILD_AUTOFOCUS:-0}" = 1 ]; then
+	PKGS="gstreamer-app-1.0 gstreamer-video-1.0 gtk4"
+	pkg-config --exists $PKGS || {
+		echo "missing pkg-config deps ($PKGS); install libgtk-4-dev," \
+		     "libgstreamer1.0-dev, libgstreamer-plugins-base1.0-dev" >&2
+		exit 1
+	}
+	mkdir -p "$SRC/usr/local/bin"
+	${CXX:-g++} -O2 -g -std=c++20 -Wall -Wextra -Wpedantic \
+		-fdebug-prefix-map="$HERE"=. -ffile-prefix-map="$HERE"=. \
+		$(pkg-config --cflags $PKGS) \
+		-o "$SRC/usr/local/bin/erhai-autofocus" \
+		"$SRC/src/erhai-autofocus.cpp" \
+		$(pkg-config --libs $PKGS)
+	ppa_scrub_debug "$SRC"
+fi
 
 find "$SRC" -type d -exec chmod 755 {} \;
 chmod 755 "$SRC"/DEBIAN/postinst "$SRC"/usr/local/sbin/*.sh \
 	  "$SRC"/usr/local/bin/erhai-autofocus
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
 
-ppa_copy "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+if [ "${NO_PPA:-0}" != 1 ]; then
+	ppa_copy "$DEB_DIR/${PKG}_${VER}_${ARCH}.deb"
+fi
 echo "built ${PKG}_${VER}_${ARCH}.deb"

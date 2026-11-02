@@ -700,8 +700,8 @@ apt install -y i2c-tools libcamera-tools v4l-utils \\
 # image analyzes with the helper's numpy backend / the app's own CPU metric
 # instead.  Same numbers, just more CPU: nothing extra to install here.
 
-# Desktop.
-apt install -y ubuntu-desktop
+# Desktop (KDE Plasma 6 Wayland + SDDM).
+apt install -y plasma-desktop sddm kde-standard
 # Ptyxis is the erhai terminal (ubuntu-desktop only RECOMMENDS it, and
 # xdg-terminal-exec is the indirection that selects it), so install it
 # explicitly.  gnome-terminal is deliberately NOT part of the image -- it was
@@ -717,12 +717,8 @@ apt purge -y gnome-terminal alacritty || true
 # further down keeps it from coming back, and its app-grid position is dropped
 # from the dconf seed (root-setup-files/skel-dconf.txt).
 apt purge -y gnome-snapshot || true
+# Core browser only; third-party browsers (Brave/Chromium) excluded per configuration
 apt install -y firefox
-# Brave Browser (its own repo, staged above); guard like firefox so a transient
-# repo hiccup is reconciled by the final 'apt --fix-broken install'.
-apt install -y brave-browser || true
-# Chromium (xtradeb/apps .deb, staged above) -- NOT Ubuntu's snap stub.
-apt install -y chromium || true
 ${EXTRA_PACKAGES:+apt install -y $EXTRA_PACKAGES}
 
 apt upgrade -y

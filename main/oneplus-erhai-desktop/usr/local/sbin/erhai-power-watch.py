@@ -391,7 +391,16 @@ class PanelInputGuard:
 
     def sync(self):
         """Engage while the blank is in force, release the moment it is not."""
-        if self.blanked():
+        if os.path.exists(self.state_file):
+            bl = read_brightness(self.bl_glob)
+            if bl is not None and bl > 0:
+                log(f'panel input guard: brightness restored to {bl} while blank active ({self.state_file}) -> clamping to 0')
+                for p in glob.glob(self.bl_glob.replace('actual_brightness', 'brightness')):
+                    try:
+                        with open(p, 'w') as fh:
+                            fh.write('0\n')
+                    except OSError:
+                        pass
             self.grab()
         else:
             self.release()
@@ -482,7 +491,7 @@ class BlankIntegrity:
         self.kmsg_pending = b''      # a record can be split across two reads
 
     def blanked(self):
-        return bool(self.guard is not None and self.guard.blanked())
+        return bool(self.guard is not None and (self.guard.blanked() or os.path.exists(self.guard.state_file)))
 
     def suppress(self, seconds):
         """Ignore the detectors for a while (a transition we started ourselves).

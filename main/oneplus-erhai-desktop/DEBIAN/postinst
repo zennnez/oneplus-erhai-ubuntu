@@ -1,66 +1,11 @@
 #!/bin/bash
 set -e
 
-# erhai: finger-drag scrolling for the Ubuntu Dock (touch-scroll patch,
-# 2026-10-04).  The dock is a GNOME SESSION-MODE extension, so a per-user
-# override is refused and the patched dash.js must sit at the extension's own
-# system path -- a path owned by gnome-shell-ubuntu-extensions.  A file from
-# this package at that path would be a dpkg file CONFLICT, so install ours with
-# dpkg-divert: Ubuntu's file is kept as dash.js.erhai-orig and an upgrade of
-# gnome-shell-ubuntu-extensions writes to the diverted name, so it can never
-# clobber the patch.  DEBIAN/postrm drops the diversion again.
-#
-# The diversion is registered WITHOUT --rename and we keep Ubuntu's original
-# ourselves: `dpkg-divert --remove --rename` refuses to overwrite a different
-# existing file, so the --rename round trip can fail on removal and leave the
-# dock with NO dash.js (measured 2026-10-04).  postrm therefore just copies
-# dash.js.erhai-orig back.
-#
-# This runs OUTSIDE the systemd guard below so an image build (chroot, no
-# systemd) applies it too.
-DOCK_EXT_DIR=/usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com
-DOCK_DASH="$DOCK_EXT_DIR/dash.js"
-DOCK_ORIG="$DOCK_DASH.erhai-orig"
-DOCK_PAYLOAD=/usr/share/oneplus-erhai-desktop/ubuntu-dock-dash.js
-if [ -d "$DOCK_EXT_DIR" ] && [ -f "$DOCK_PAYLOAD" ]; then
-	# Save Ubuntu's original once -- but never our own patched file (it
-	# carries the _initTouchScroll marker), so a re-install cannot turn the
-	# patched file into "the original".
-	if [ ! -f "$DOCK_ORIG" ] && [ -f "$DOCK_DASH" ] &&
-	   ! grep -q '_initTouchScroll' "$DOCK_DASH" 2>/dev/null; then
-		cp -a "$DOCK_DASH" "$DOCK_ORIG" 2>/dev/null || true
-	fi
-	dpkg-divert --package oneplus-erhai-desktop --add --no-rename \
-		--divert "$DOCK_ORIG" "$DOCK_DASH" >/dev/null 2>&1 || true
-	install -o root -g root -m 0644 "$DOCK_PAYLOAD" "$DOCK_DASH" || true
-fi
-
-# erhai: touch long-press -> context menu for the Desktop Icons NG extension
-# (2026-10-04).  DING opens its context menus only on a secondary (mouse)
-# button press; a touch long tap arrives as an emulated primary (button 1)
-# press, so the menu never opened with a finger.  ding@rastersoft.com belongs
-# to gnome-shell-ubuntu-extensions, so the patched files are installed with
-# dpkg-divert (Ubuntu's originals kept as *.erhai-orig), exactly like the dock
-# patch above -- a plain file at the extension's own path would be a dpkg file
-# conflict and an upgrade of gnome-shell-ubuntu-extensions could clobber it.
-# DEBIAN/postrm drops the diversions again.
-DING_EXT_DIR=/usr/share/gnome-shell/extensions/ding@rastersoft.com
-DING_PAYLOAD_DIR=/usr/share/oneplus-erhai-desktop/ding-touch
-for DING_REL in app/desktopGrid.js app/desktopManager.js app/desktopIconItem.js; do
-	DING_FILE="$DING_EXT_DIR/$DING_REL"
-	DING_ORIG="$DING_FILE.erhai-orig"
-	DING_PAYLOAD="$DING_PAYLOAD_DIR/$DING_REL"
-	[ -d "$DING_EXT_DIR" ] && [ -f "$DING_PAYLOAD" ] || continue
-	# Save Ubuntu's original once -- but never our own patched file (it
-	# carries the _initTouchLongPress marker), so a re-install cannot turn
-	# the patched file into "the original".
-	if [ ! -f "$DING_ORIG" ] && [ -f "$DING_FILE" ] &&
-	   ! grep -q '_initTouchLongPress' "$DING_FILE" 2>/dev/null; then
-		cp -a "$DING_FILE" "$DING_ORIG" 2>/dev/null || true
-	fi
-	dpkg-divert --package oneplus-erhai-desktop --add --no-rename \
-		--divert "$DING_ORIG" "$DING_FILE" >/dev/null 2>&1 || true
-	install -o root -g root -m 0644 "$DING_PAYLOAD" "$DING_FILE" || true
+# Clear any legacy diversions if previously installed
+for div in /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopGrid.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopIconItem.js; do
+    if dpkg-divert --list oneplus-erhai-desktop 2>/dev/null | grep -qF ""; then
+        dpkg-divert --package oneplus-erhai-desktop --remove --no-rename "" >/dev/null 2>&1 || true
+    fi
 done
 
 if [ -d /run/systemd/system ]; then

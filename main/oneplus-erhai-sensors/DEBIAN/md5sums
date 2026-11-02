@@ -1,3 +1,4 @@
+97f88d2e5b8de1853ecfc8f9199a5a6b  etc/systemd/system/erhai-cover.service
 7676c4981e004693141e92db94b4c15a  etc/systemd/system/erhai-tablet-mode.service
 112316de9836d3d4ae90982ac73135f6  etc/systemd/system/hexagonrpcd.service
 93f0ac4c82d584744e908a683be17a65  etc/systemd/system/iio-sensor-proxy.service.d/erhai.conf
@@ -8,17 +9,15 @@ cc70c47fdc17b675eba9e518f9ea58a3  usr/local/bin/hexagonrpcd-erhai
 bae961b475fef6c6b3dfd5bc406eb2f1  usr/local/bin/ssccli
 5835dc1557dccfd1a39b679be3c943d0  usr/local/lib/aarch64-linux-gnu/libssc.so.2
 df12725c78284cd1dcd2458d60eefabd  usr/local/libexec/iio-sensor-proxy
-4d3bde0add2a22fb96fe026ba78da6c8  usr/local/sbin/erhai-alsd.py
+58ea0f0c6b9f4dc4858cb019464bbc78  usr/local/sbin/erhai-alsd.py
 278d43ba3cef2d9529dc6e836d98821a  usr/local/sbin/erhai-tablet-mode.py
-48b617c2a5bc84c806a741d8929002d5  usr/local/sbin/__pycache__/erhai-alsd.cpython-314.pyc
+8d5f258309963a39b65e0d8fa6a694e1  usr/sbin/erhai-cover
+ac30e33d0edb76c97f5aa7833d42b43c  usr/share/doc/oneplus-erhai-sensors/README
 e1ef56bc4d69091d1f3f4e1137a76834  usr/share/doc/oneplus-erhai-sensors/patches/hexagonrpcd-0.4.0-odm-sensor-config.patch
 5a6d79fa69545e69ffb236b8515126e4  usr/share/doc/oneplus-erhai-sensors/patches/iio-sensor-proxy-3.9-ssc-startup-claim-race.patch
 d4c5007d3a95ed6de1141024595e8d24  usr/share/doc/oneplus-erhai-sensors/patches/libssc-0.4.4-erhai-sample-rate.patch
-ac30e33d0edb76c97f5aa7833d42b43c  usr/share/doc/oneplus-erhai-sensors/README
-5b083616dd6d728fab619ec87443ff67  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/extension.js
-59083e12045dafde81da43aed7e546bf  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/metadata.json
-ca2b3fda83b4f7ff4e2dbe2e839eb084  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/gschemas.compiled
-ba3c2a157ef6924fb83a62697a3f91d8  usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/org.erhai.sensors.gschema.xml
+ca2b3fda83b4f7ff4e2dbe2e839eb084  usr/share/glib-2.0/schemas/gschemas.compiled
+ba3c2a157ef6924fb83a62697a3f91d8  usr/share/glib-2.0/schemas/org.erhai.sensors.gschema.xml
 311ba83657cc82e852cdf45b3b7a826c  var/lib/hexagonfs-erhai/acdb/nn_vad_models/fai__3.0.0_0.0__eai_4.2_enpuv5.pmd
 314117179aa9ce7e1608e17f2a47b3a0  var/lib/hexagonfs-erhai/acdb/nn_vad_models/fai__3.0.0_0.0__eai_4.6_enpuv5.pmd
 fe3f819b56b3e1681331625bcdf6fa04  var/lib/hexagonfs-erhai/acdb/sun_mtp/MTP_acdb_cal.acdb
@@ -33,8 +32,8 @@ d78516183fe933155e9e7f6d433f096b  var/lib/hexagonfs-erhai/dsp/libsns_remote_proc
 9b46e49e6295a0bd0d18807c91d9c253  var/lib/hexagonfs-erhai/dsp/sns_tppe.so
 2ddefea2f465a5e26366a32aeee496e0  var/lib/hexagonfs-erhai/odm/sensor/config/json_list
 02fb6e2d88a183ab26dfb1b43c28a4e6  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_bu52053nvx_0.json
-c5dfd968feaa7d3f08fc05eeab54b5e6  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_alsps_hw_stk3b6x.json
 babc89a41203334c13cd91acfe44eadf  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_alsps.json
+c5dfd968feaa7d3f08fc05eeab54b5e6  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_alsps_hw_stk3b6x.json
 676a597487b098295f0dcca8826229c7  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_bmi3x0_0.json
 7a96fc60b7c37680aca94e5f00bf97b5  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_freefall.json
 a0df7676bd736addfc2812a6c7e9cb5c  var/lib/hexagonfs-erhai/odm/sensor/config/pakala_mtp_motion_recognition.json
@@ -131,8 +130,8 @@ c28f1d5377d75531e1efd6d4887b7732  var/lib/hexagonfs-erhai/sensors/config/qsh_cam
 7b84cd08a0857a13d642e58c48fa9be9  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_hummerFront_3.json
 da1be39205d87a875bae48f87bb6e328  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_imx480_3.json
 2e24a8a7405669c0bb5cb941ded320ee  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_imx615_3.json
-f6d177efd1cc8a13853fd6e5873b4387  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_imx688_6_actuator.json
 c0e2ddc10504002f3d1b8b1284dc2c7e  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_imx688_6.json
+f6d177efd1cc8a13853fd6e5873b4387  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_imx688_6_actuator.json
 01e6381d89f88a132e5fba06f78a8ee3  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_ktmFront_2.json
 27e6e46d918b845554b55090026f76e3  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_ov32c4c_4.json
 02a9850fd017315028e578f7316b9a9d  var/lib/hexagonfs-erhai/sensors/config/qsh_camera_ov32c4c_4_sm8735.json

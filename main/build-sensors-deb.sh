@@ -31,6 +31,7 @@ for f in DEBIAN/postinst \
 	 etc/systemd/system/hexagonrpcd.service \
 	 etc/systemd/system/iio-sensor-proxy.service.d/erhai.conf \
 	 etc/systemd/system/erhai-tablet-mode.service \
+	 etc/systemd/system/erhai-cover.service \
 	 etc/systemd/user/erhai-alsd.service \
 	 etc/udev/rules.d/90-erhai-ssc-sensors.rules \
 	 usr/local/bin/hexagonrpcd-erhai \
@@ -40,14 +41,12 @@ for f in DEBIAN/postinst \
 	 usr/local/lib/aarch64-linux-gnu/libssc.so.2 \
 	 usr/local/sbin/erhai-tablet-mode.py \
 	 usr/local/sbin/erhai-alsd.py \
-	 usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/extension.js \
-	 usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/metadata.json \
-	 usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/gschemas.compiled \
-	 usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/org.erhai.sensors.gschema.xml \
+	 usr/sbin/erhai-cover \
+	 usr/share/glib-2.0/schemas/org.erhai.sensors.gschema.xml \
 	 var/lib/hexagonfs-erhai/odm/sensor/config/json_list \
 	 var/lib/hexagonfs-erhai/dsp/fastrpc_shell_0 \
 	 var/lib/hexagonfs-erhai/socinfo; do
-	[ -e "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
+	[ -e "$SRC/$f" ] || [ -L "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
 
 find "$SRC" -type d -exec chmod 755 {} \;
@@ -57,11 +56,13 @@ chmod 755 "$SRC"/DEBIAN/postinst \
 	"$SRC"/usr/local/bin/ssccli \
 	"$SRC"/usr/local/libexec/iio-sensor-proxy \
 	"$SRC"/usr/local/sbin/erhai-tablet-mode.py \
-	"$SRC"/usr/local/sbin/erhai-alsd.py
+	"$SRC"/usr/local/sbin/erhai-alsd.py \
+	"$SRC"/usr/sbin/erhai-cover
 
-# Compile the extension's GSettings schema (org.erhai.sensors).
-glib-compile-schemas \
-	"$SRC"/usr/share/gnome-shell/extensions/erhai-sensors@erhai.local/schemas/
+# Compile system GSettings schemas
+if [ -d "$SRC"/usr/share/glib-2.0/schemas ]; then
+	glib-compile-schemas "$SRC"/usr/share/glib-2.0/schemas/
+fi
 chmod -R u=rwX,go=rX "$SRC"/etc "$SRC"/var "$SRC"/usr/share
 
 # md5sums for every payload file (DEBIAN/ excluded), sorted so the manifest is
