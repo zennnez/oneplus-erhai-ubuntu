@@ -90,14 +90,17 @@ def set_osk(enable):
     env = dict(os.environ,
                DBUS_SESSION_BUS_ADDRESS=f'unix:path=/run/user/{uid}/bus',
                XDG_RUNTIME_DIR=f'/run/user/{uid}')
-    r = subprocess.run(['runuser', '-u', name, '--', 'gsettings', 'set',
-                        SCHEMA, KEY, 'true' if enable else 'false'],
-                       env=env, capture_output=True, text=True)
-    if r.returncode == 0:
-        print(f'{name} (uid {uid}): OSK {"on" if enable else "off"}',
-              flush=True)
-    else:
-        print(f'gsettings failed: {r.stderr.strip()}', flush=True)
+    # KDE Plasma 6 Wayland mode: 0 = Off (attached), 2 = Auto / Touch (detached)
+    k_mode = '2' if enable else '0'
+    subprocess.run(['runuser', '-u', name, '--', 'busctl', '--user', 'set-property',
+                    'org.kde.KWin', '/VirtualKeyboard', 'org.kde.kwin.VirtualKeyboard',
+                    'mode', 'i', k_mode], env=env, capture_output=True)
+    # GNOME fallback if gsettings schema is installed
+    subprocess.run(['runuser', '-u', name, '--', 'gsettings', 'set',
+                    SCHEMA, KEY, 'true' if enable else 'false'],
+                   env=env, capture_output=True, text=True)
+    print(f'{name} (uid {uid}): OSK {"on" if enable else "off"} (KWin mode {k_mode})',
+          flush=True)
 
 
 def watch_sysfs(path):

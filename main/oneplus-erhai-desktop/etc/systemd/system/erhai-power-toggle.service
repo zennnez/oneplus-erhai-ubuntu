@@ -1,6 +1,6 @@
 [Unit]
 Description=erhai power button -> REAL panel+GPU power cycle (Android-style)
-After=multi-user.target
+After=basic.target
 
 [Service]
 Type=simple

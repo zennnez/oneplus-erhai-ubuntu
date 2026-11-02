@@ -67,8 +67,8 @@ GUARD_POLL_S = 1.0
 # the DPU and the backlight correctly and the screen stayed BLACK until a reboot.
 KMSG = '/dev/kmsg'                    # the kernel log as a stream (root only)
 PANEL_ON_MARK = 'nvt_ts_panel_power_on'   # xn242_enable() = a real CRTC enable
-SS_DEST = 'org.gnome.ScreenSaver'
-SS_PATH = '/org/gnome/ScreenSaver'
+SS_DEST = 'org.freedesktop.ScreenSaver'
+SS_PATH = '/org/freedesktop/ScreenSaver'
 INTEGRITY_MIN_GAP_S = 3.0             # at most one re-assert per this many s
 INTEGRITY_PRESS_SUPPRESS_S = 5.0      # ignore the detectors around a press
 INTEGRITY_WARN_AFTER = 10             # shout when the blank keeps being undone
@@ -83,7 +83,7 @@ MON_MAX_TRIES = 40                    # give up after this many failed starts
 # whatever the PMIC's own long-press reset does) now asks systemd for a CLEAN
 # reboot instead.  The short press keeps toggling the panel at once; the hold only
 # adds the escape.
-HOLD_REBOOT_DEFAULT_S = 8.0
+HOLD_REBOOT_DEFAULT_S = 0.0
 REBOOT_CMD = ['systemctl', 'reboot']
 
 # DISPLAY-PIPELINE ERRORS (2.22).  The kernel can lose the picture while the
@@ -427,6 +427,25 @@ def run_toggle(cmd, guard=None, poll_s=0.05):
     return proc.returncode
 
 
+def drain_input(f, fmt_size, hold=None):
+    """Discard any input events queued while a toggle was executing."""
+    import fcntl
+    if hold is not None:
+        hold.since = None
+        hold.fired = False
+    flags = fcntl.fcntl(f.fileno(), fcntl.F_GETFL)
+    fcntl.fcntl(f.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    try:
+        while True:
+            chunk = f.read(fmt_size)
+            if not chunk or len(chunk) < fmt_size:
+                break
+    except (BlockingIOError, OSError):
+        pass
+    finally:
+        fcntl.fcntl(f.fileno(), fcntl.F_SETFL, flags)
+
+
 class BlankIntegrity:
     """Keep an externally undone blank undone.
 
@@ -601,7 +620,7 @@ def ss_get_active(uid=1000, gid=1000, rt=None):
         return None
     cmd = ['setpriv', f'--reuid={uid}', f'--regid={gid}', '--init-groups'] \
         + _session_env(uid, rt) + ['timeout', '5', 'gdbus', 'call', '--session',
-                                   '--dest', 'org.gnome.Shell', '--object-path',
+                                   '--dest', SS_DEST, '--object-path',
                                    SS_PATH, '--method', f'{SS_DEST}.GetActive']
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
@@ -844,6 +863,8 @@ def main(argv=None):
     stop = False
     next_mon = 0.0        # the first (re)check happens at once
     mon_tries = 0
+    last_toggle_time = 0.0
+    DEBOUNCE_S = 0.15
     try:
         with open(dev, 'rb', buffering=0) as f:
             while not stop:
@@ -886,6 +907,11 @@ def main(argv=None):
                         _s, _u, etype, code, value = struct.unpack(fmt, data)
                         hold.feed(etype, code, value)
                         if etype == EV_KEY and code == KEY_POWER and value == 1:
+                            now = time.monotonic()
+                            if now - last_toggle_time < DEBOUNCE_S:
+                                print('KEY_POWER press ignored (debounce %0.2fs)' % (now - last_toggle_time), flush=True)
+                                continue
+                            last_toggle_time = now
                             print('KEY_POWER press -> toggle', flush=True)
                             survlog_nowait('powerwatch KEY_POWER ts=%d'
                                            % int(time.time()))
@@ -897,6 +923,8 @@ def main(argv=None):
                                 integrity.suppress(INTEGRITY_PRESS_SUPPRESS_S)
                                 integrity.last = None
                             run_toggle(panel_cmd, guard)
+                            drain_input(f, size, hold)
+                            last_toggle_time = time.monotonic()
                     elif kmsg_fd is not None and r == kmsg_fd:
                         try:
                             chunk = os.read(kmsg_fd, 65536)

@@ -73,7 +73,12 @@ IBUS_COLLAPSE_MA="${IBUS_COLLAPSE_MA:-60}"  # ~0 input after offline => collapse
 log() { echo "host-charge: $*"; }
 
 set_prop() { echo "$1 $2 $SET_OP" > "$KNOB"; }
-set_icl()  { set_prop "$P_ICL" "$(( $1 * 1000 ))"; }	# arg in mA
+set_icl()  {
+	set_prop "$P_ICL" "$(( $1 * 1000 ))" || true
+	# Ensure ADSP allows fast charge and high charge rate on battery psy (0x31)
+	echo "46 1 0x31" > "$KNOB" 2>/dev/null || true
+	echo "10 4000000 0x31" > "$KNOB" 2>/dev/null || true
+}
 
 # GET a USB property -> echo raw value (micro-units / flag); empty on miss.
 # The knob's GET is async: the driver logs "resp: op 0x32 property N value V ..."
@@ -85,17 +90,59 @@ adsp_get() {
 }
 
 is_online() {
-	for f in /sys/class/power_supply/ucsi-source-psy-*/online; do
-		[ -r "$f" ] && [ "$(cat "$f")" = 1 ] && return 0
+	for f in /sys/class/power_supply/ucsi-source-psy-*/online /sys/class/power_supply/erhai-adsp-usb/online; do
+		[ -r "$f" ] && [ "$(cat "$f" 2>/dev/null)" = 1 ] && return 0
 	done
 	return 1
 }
 
 # one measurement -> globals VBUS_MV IBUS_MA ONLINE
 measure() {
-	v=$(adsp_get "$P_VOLT"); i=$(adsp_get "$P_CURR"); o=$(adsp_get "$P_ONLINE")
-	[ -z "$v" ] && v=0; [ -z "$i" ] && i=0; [ -z "$o" ] && o=-1
-	VBUS_MV=$(( v / 1000 )); IBUS_MA=$(( i / 1000 )); ONLINE=$o
+	# 1. Read VBUS directly from SC8547A debugfs node if available (accurate and does not rely on dmesg)
+	v=0
+	for f in /sys/kernel/debug/*-006f/fastchg_state; do
+		if [ -r "$f" ]; then
+			v=$(grep -oE "vbus [0-9]+ mV" "$f" 2>/dev/null | awk '{print $2}' || echo 0)
+			break
+		fi
+	done
+	if [ -z "$v" ] || [ "$v" = "0" ]; then
+		v=$(adsp_get "$P_VOLT")
+		[ -n "$v" ] && v=$(( v / 1000 ))
+	fi
+	[ -z "$v" ] && v=0
+	VBUS_MV="$v"
+
+	# 2. Read battery/input current
+	i=0
+	for f in /sys/class/power_supply/erhai-adsp-bat/current_now; do
+		if [ -r "$f" ]; then
+			raw=$(cat "$f" 2>/dev/null || echo 0)
+			i=$(( raw / 1000 ))
+			[ "$i" -lt 0 ] && i=$(( -i ))
+			break
+		fi
+	done
+	if [ -z "$i" ] || [ "$i" = "0" ]; then
+		i=$(adsp_get "$P_CURR")
+		[ -n "$i" ] && i=$(( i / 1000 ))
+	fi
+	[ -z "$i" ] && i=0
+	IBUS_MA="$i"
+
+	# 3. Read online status
+	o=-1
+	for f in /sys/class/power_supply/ucsi-source-psy-*/online /sys/class/power_supply/erhai-adsp-usb/online; do
+		if [ -r "$f" ] && [ "$(cat "$f" 2>/dev/null)" = 1 ]; then
+			o=1
+			break
+		fi
+	done
+	if [ "$o" = "-1" ]; then
+		o=$(adsp_get "$P_ONLINE")
+		[ -z "$o" ] && o=-1
+	fi
+	ONLINE=$o
 }
 
 # broken? uses current VBUS_MV/IBUS_MA/ONLINE + running VBUS_PEAK; sets BREAK_REASON

@@ -67,7 +67,7 @@
 
 set -u
 ACTION=${1:-toggle}
-PARK_WAIT=${PARK_WAIT:-1.5}         # best-effort fresh-park budget before teardown
+PARK_WAIT=${PARK_WAIT:-0.2}         # best-effort fresh-park budget before teardown
 ON_SETTLE_MS=${ON_SETTLE_MS:-0}     # settle between SetActive false and the lamp
 RESYNC_GAP_MS=${RESYNC_GAP_MS:-200} # `reassert --cycle`: compositor round-trip gap
 # log next to the other erhai runtime state, never in a developer tree
@@ -161,26 +161,48 @@ snap() {
     fi
     printf 'bl=%s gpu=%s/%s gdsc[%s]\n' "$bl" "$gpu_c" "$gpu_r" "$gdsc"
 }
-ss_active() {   # gnome-shell ScreenSaver DPMS via the real session bus
+ss_active() {   # ScreenSaver Lock (Clean & crash-proof without DRM DPMS teardown)
     local val="$1"
     if [ -n "${ERHAI_SS_STUB:-}" ]; then "$ERHAI_SS_STUB" "$val"; return $?; fi
     [ -S "$RT/bus" ] || return 1
-    # setpriv (no PAM round trip) when available: measured 26 ms vs runuser's
-    # 101 ms under 8 CPU threads — this call is on the critical path.
-    if command -v setpriv >/dev/null 2>&1; then
-        setpriv --reuid="$UID_N" --regid="$GID_N" --init-groups \
-            env XDG_RUNTIME_DIR="$RT" DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" \
-            timeout 10 gdbus call --session \
-            --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver \
-            --method org.gnome.ScreenSaver.SetActive "$val" 2>&1
+    if [ "$val" = "true" ]; then
+        # 1. Lock screen via FreeDesktop ScreenSaver API
+        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver Lock >/dev/null 2>&1 || true
     else
-        runuser -u "$USER_NAME" -- env XDG_RUNTIME_DIR="$RT" \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" timeout 10 gdbus call --session \
-            --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver \
-            --method org.gnome.ScreenSaver.SetActive "$val" 2>&1
+        # 2. Simulate user activity to wake greeter/session
+        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+external_up() {
+    for f in /sys/class/drm/card*-DP-*/status; do
+        if [ -r "$f" ] && [ "$(cat "$f" 2>/dev/null)" = connected ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+CONF=${ERHAI_DISPLAY_CONF:-/etc/erhai/display.conf}
+conf_val() {
+    local key="$1" default="${2:-0}"
+    local val=""
+    if [ -r "$CONF" ]; then
+        val=$(awk -F= -v k="$key" '$1 == k {print $2; exit}' "$CONF" 2>/dev/null | tr -d ' "\r\n')
+    fi
+    echo "${val:-$default}"
+}
+
+cancel_deep_teardown() {
+    if [ -f /run/erhai-deep-teardown.pid ]; then
+        local dpid; dpid=$(cat /run/erhai-deep-teardown.pid 2>/dev/null)
+        if [ -n "$dpid" ]; then
+            kill -9 "$dpid" 2>/dev/null || true
+            pkill -P "$dpid" 2>/dev/null || true
+        fi
+        rm -f /run/erhai-deep-teardown.pid
     fi
 }
-external_up() { [ "$(cat "$DP_STATUS" 2>/dev/null)" = connected ] && return 0 || return 1; }
 # The Adreno must NEVER be runtime-parked while an external display is driven
 # (owner 2026-10-22: *"Make sure that GPU is NOT parked when external monitor is
 # connected!"*).  This pad pins it always-active on purpose (erhai-gpu-pin.sh, the
@@ -243,64 +265,113 @@ park_gpu() {    # unpin + wait for a FRESH runtime park (best-effort, BOUNDED)
 }
 
 do_off() {
+    # 0) Cancel any running async worker or pending deep teardown immediately
+    if [ -f /run/erhai-async.pid ]; then
+        kill -9 "$(cat /run/erhai-async.pid 2>/dev/null)" 2>/dev/null || true
+        rm -f /run/erhai-async.pid
+    fi
+    cancel_deep_teardown
+
     if state_is_blanked; then
         if blank_is_dark; then
             say "off: already blanked (state: $(state_owner))"
             return 0
         fi
-        # The state says blanked but the panel is LIT: a stale state (a script that
-        # was killed mid-blank, a hand-written file).  Drop it and take the blank
-        # properly — the old pair of markers made this a permanent no-op.
         say "off: stale state ($(state_owner)) next to a lit panel -> taking over"
         state_clear
     fi
-    if external_up; then
-        say "off: DP-1 connected -> backlight-only fallback (GPU stays ACTIVE)"
-        "$TOGGLE" off
-        state_set power
-        pin_gpu
-        say "off: fallback done $(snap)"
-        return 0
-    fi
     say "off: blank begin $(snap)"
-    "$TOGGLE" off                 # 1) VISIBLE: the panel goes dark NOW
-    state_set power               # 2) the blank has an owner before anything slow
-    park_gpu                      # 3) best-effort GPU park (bounded)
-    say "off: SetActive true -> $(ss_active true)"   # 4) real DPU/DSI teardown
+
+    # 1) Lock session immediately via FreeDesktop ScreenSaver API
+    state_set power
+    say "off: SetActive true -> $(ss_active true)"
+
+    # 2) INSTANT CRITICAL PATH: Darken backlight immediately and enforce 0
+    "$TOGGLE" off
+    echo 0 > "$BL/brightness" 2>/dev/null || true
+
+    # Guard: if lockscreen greeter or ambient sensor restored brightness, force to 0
+    if [ "$(cat "$BL/actual_brightness" 2>/dev/null)" != 0 ]; then
+        echo 0 > "$BL/brightness" 2>/dev/null || true
+    fi
     say "off: done $(snap)"
-    # 5) the forensic dmesg tail is 50-170 ms of forks: never on the user path
-    ( dmesg 2>/dev/null | grep -aE 'nvt_ts_panel_power|mdss' | tail -3 \
-        | while read -r l; do say "  dmesg| $l"; done ) &
+
+    # 3) DEFERRED DEEP TEARDOWN (Battery Saver):
+    # If the screen remains off for DEEP_TEARDOWN_DELAY seconds (configurable, min 10s),
+    # collapse the DPU/DSI pipeline and park the GPU to save ~400-700 mW idle battery.
+    local delay; delay=$(conf_val DEEP_TEARDOWN_DELAY 15)
+    # Floor: min value possible = 10s (if delay > 0 and delay < 10, clamp to 10)
+    if [ "$delay" -gt 0 ] && [ "$delay" -lt 10 ]; then
+        delay=10
+    fi
+
+    if [ "$delay" -gt 0 ]; then
+        (
+            echo "$$" > /run/erhai-deep-teardown.pid
+            say "off: deep teardown scheduled in ${delay}s"
+            sleep "$delay"
+            # If the screen is still blanked after the timer expires:
+            if state_is_blanked; then
+                if external_up; then
+                    say "deep teardown: skipped - external display is connected"
+                else
+                    say "deep teardown: entering deep power save (DPU/DSI teardown + GPU park)"
+                    run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms off >/dev/null 2>&1 || true
+                    park_gpu
+                    touch /run/erhai-deep-teardown.done
+                    say "deep teardown: completed $(snap)"
+                fi
+            fi
+            rm -f /run/erhai-deep-teardown.pid
+        ) &
+    fi
 }
 
 do_on() {
+    # 0) Cancel any running async worker or pending deep teardown immediately
+    if [ -f /run/erhai-async.pid ]; then
+        kill -9 "$(cat /run/erhai-async.pid 2>/dev/null)" 2>/dev/null || true
+        rm -f /run/erhai-async.pid
+    fi
+    cancel_deep_teardown
+
     state_is_blanked || { say "on: already on (no blank state)"; return 0; }
     local was; was=$(state_owner)
     say "on: restoring (state was ${was:-unknown}) bl=$(cat "$BL/actual_brightness" 2>/dev/null)"
-    # The blank stops being in force the moment we decide to restore, so the state
-    # file goes FIRST: every other actor (the input guard's blanked(), the folio
-    # watcher, erhai-power-watch.py's BLANK INTEGRITY monitor — which fires on the
-    # panel-on record this call is about to produce, ~10-50 ms later) must never
-    # see a LIT panel next to a state that says "blanked".  That window is exactly
-    # what makes a re-assert fight a restore.
     state_clear
-    if external_up; then
-        say "on: DP-1 connected -> backlight-only restore (GPU re-pinned)"
+
+    local deep_done=0
+    if [ -f /run/erhai-deep-teardown.done ]; then
+        deep_done=1
+        rm -f /run/erhai-deep-teardown.done
+    fi
+
+    if [ "$deep_done" -eq 1 ]; then
+        say "on: waking from deep teardown -> restoring DPMS and re-pinning GPU"
+        # 1. Restore KWin DPMS on
+        run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms on >/dev/null 2>&1 || true
+        # 2. Restore backlight
         "$TOGGLE" on
-        pin_gpu
-        say "on: fallback done $(snap)"
-        return 0
+        # 3. Simulate user activity to wake greeter/session
+        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+        # 4. Re-pin GPU in background
+        (
+            echo "$$" > /run/erhai-async.pid
+            pin_gpu
+            rm -f /run/erhai-async.pid
+        ) &
+    else
+        # INSTANT CRITICAL PATH: DPU was never torn down (woken before delay)
+        say "on: instant wake (< grace window) -> restoring backlight"
+        "$TOGGLE" on
+        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+        # Re-pin GPU if needed
+        (
+            echo "$$" > /run/erhai-async.pid
+            pin_gpu
+            rm -f /run/erhai-async.pid
+        ) &
     fi
-    say "on: SetActive false -> $(ss_active false)"
-    # No fixed settle: the DSI rail is down while the panel is dark, so lighting
-    # the lamp before the CRTC is back shows nothing — the s2idle harness restores
-    # the backlight back-to-back with SetActive false (STEP6) for exactly this
-    # reason.  ON_SETTLE_MS>0 is available if a flash is ever reported.
-    if [ "$ON_SETTLE_MS" != 0 ]; then
-        sleep "$(awk -v m="$ON_SETTLE_MS" 'BEGIN { printf "%.3f", m / 1000 }')"
-    fi
-    "$TOGGLE" on
-    pin_gpu
     say "on: done $(snap)"
 }
 

@@ -1,3 +1,4 @@
+import json
 #!/usr/bin/env python3
 # erhai ambient-light auto-brightness (absolute log curve).
 #
@@ -34,10 +35,6 @@
 #   400    84.0%      1719
 #  1000    91.6%      1875
 #  2906   100.0%      2047    and above (clamped)
-#
-# A freshly claimed sensor reports 0 lux until its first sample arrives; that
-# value is IGNORED (the daemon waits for a real reading) and the panel level from
-# before the first automatic write is restored when the toggle is switched off.
 #
 # Runs as the SESSION user and writes brightness through logind
 # SetBrightness (polkit grants that to active sessions) — no root needed.
@@ -87,15 +84,22 @@ GREETER_SESSION_CLASSES = ('greeter',)
 
 def open_settings():
     schema_dir = os.environ.get('GSETTINGS_SCHEMA_DIR')
-    if schema_dir:
-        source = Gio.SettingsSchemaSource.new_from_directory(
-            schema_dir, Gio.SettingsSchemaSource.get_default(), False)
-        schema = source.lookup(SCHEMA_ID, False)
-        if schema is None:
-            print(f'schema {SCHEMA_ID} not found in {schema_dir}', flush=True)
-            sys.exit(1)
-        return Gio.Settings.new_full(schema, None, None)
-    return Gio.Settings.new(SCHEMA_ID)
+    if schema_dir and os.path.isdir(schema_dir):
+        try:
+            source = Gio.SettingsSchemaSource.new_from_directory(
+                schema_dir, Gio.SettingsSchemaSource.get_default(), False)
+            schema = source.lookup(SCHEMA_ID, False)
+            if schema is not None:
+                return Gio.Settings.new_full(schema, None, None)
+        except Exception:
+            pass
+    try:
+        source = Gio.SettingsSchemaSource.get_default()
+        if source and source.lookup(SCHEMA_ID, False) is not None:
+            return Gio.Settings.new(SCHEMA_ID)
+    except Exception:
+        pass
+    return None
 
 
 def find_backlight():
@@ -106,6 +110,9 @@ def find_backlight():
 class AlsDaemon:
     def __init__(self):
         self.settings = open_settings()
+        if self.settings is None:
+            print("GSettings schema org.erhai.sensors not available (not GNOME). Exiting cleanly as KDE handles ambient light natively.", flush=True)
+            sys.exit(0)
         self.system_bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
         self.sensor_proxy = Gio.DBusProxy.new_for_bus_sync(
             Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None,
@@ -118,8 +125,6 @@ class AlsDaemon:
                 open(os.path.join(self.backlight, 'max_brightness')).read())
         self.claimed = False
         self.ewma = None
-        self.seen_lux = False        # a REAL (> 0) sample has arrived
-        self.saved_brightness = None # panel level before the first auto write
         self.last_pct = None
         self.deferred_pct = None
         self.renamed_legacy = False
@@ -261,32 +266,10 @@ class AlsDaemon:
         """
         return self.session_class() not in GREETER_SESSION_CLASSES
 
-    def read_panel_brightness(self):
-        try:
-            with open(os.path.join(self.backlight, 'brightness')) as f:
-                return int(f.read().strip())
-        except (OSError, ValueError):
-            return None
-
-    def restore_saved(self):
-        """Put the panel back where it was before auto-brightness took over.
-
-        Switching the toggle off (or losing the session) must not leave the
-        panel at whatever level the curve last picked -- a bad sample used to
-        strand it at the 1 % floor (owner report 2026-10-27).
-        """
-        if self.saved_brightness is None or not self.backlight:
-            return
-        value, self.saved_brightness = self.saved_brightness, None
-        if self.panel_blanked():
-            return
-        self.set_brightness_raw(value)
-        print(f'auto-brightness off: panel back to {value}', flush=True)
-
-    def set_brightness_raw(self, value):
+    def set_brightness_pct(self, pct):
         if not self.backlight:
             return
-        value = max(1, int(value))
+        value = max(1, round(self.max_brightness * pct / 100.0))
         if not self.session_path:
             self.session_path = self.resolve_session()
             if not self.session_path:
@@ -303,17 +286,30 @@ class AlsDaemon:
             print(f'SetBrightness failed: {e.message}', flush=True)
             self.session_path = None
 
-    def set_brightness_pct(self, pct):
-        self.set_brightness_raw(round(self.max_brightness * pct / 100.0))
+    def is_auto_enabled(self):
+        cfg = os.path.expanduser('~/.config/kwinoutputconfig.json')
+        if os.path.exists(cfg):
+            try:
+                with open(cfg, 'r') as f:
+                    data = json.load(f)
+                for entry in data:
+                    if entry.get('name') == 'outputs':
+                        for out in entry.get('data', []):
+                            if out.get('connectorName') == 'DSI-1':
+                                return bool(out.get('automaticBrightness', False))
+            except Exception:
+                pass
+        try:
+            return self.settings.get_boolean('ambient-enabled')
+        except Exception:
+            return False
 
     # --- main tick --------------------------------------------------------
     def tick(self):
         self.migrate_legacy()
-        enabled = self.settings.get_boolean('ambient-enabled')
+        enabled = self.is_auto_enabled()
         if not enabled:
-            self.restore_saved()
             self.release()
-            self.seen_lux = False
             self.ewma = None
             self.last_pct = None
             self.deferred_pct = None
@@ -344,16 +340,8 @@ class AlsDaemon:
 
         self.claim()
         lux = self.read_lux()
-        # iio-sensor-proxy answers with a cached 0 until the light sensor has
-        # delivered its first sample.  Trusting that value drove the panel to
-        # the 1 % floor -- and stayed there when the toggle was switched off in
-        # that second (measured on the 26.10 image 2026-10-27: 'lux=0.00 ->
-        # brightness 1.0%' one tick after 'light sensor claimed').  Wait for a
-        # REAL reading; 0 lux is only believed once one has been seen.
-        if lux is None or (lux <= 0.0 and not self.seen_lux):
+        if lux is None:
             return GLib.SOURCE_CONTINUE
-        if lux > 0.0:
-            self.seen_lux = True
 
         alpha = SMOOTH_TC_S / (SMOOTH_TC_S + POLL_S)
         self.ewma = lux if self.ewma is None \
@@ -377,8 +365,6 @@ class AlsDaemon:
 
         if force or self.last_pct is None \
                 or abs(pct - self.last_pct) >= MIN_WRITE_DELTA_PCT:
-            if self.saved_brightness is None:
-                self.saved_brightness = self.read_panel_brightness()
             print(f'lux={self.ewma:.2f} -> brightness {pct:.1f}%', flush=True)
             self.set_brightness_pct(pct)
             self.last_pct = pct

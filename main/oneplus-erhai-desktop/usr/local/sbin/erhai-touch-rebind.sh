@@ -34,11 +34,11 @@ log() {
 
 start_gdm() {
 	if [ "${ERHAI_NO_GDM:-0}" = 1 ]; then
-		log "ERHAI_NO_GDM set -> NOT starting gdm"
+		log "ERHAI_NO_GDM set -> NOT starting display manager"
 		return 0
 	fi
-	log "starting gdm"
-	systemctl --no-block start gdm.service
+	log "starting display-manager"
+	systemctl --no-block start display-manager.service 2>/dev/null || systemctl --no-block start sddm.service 2>/dev/null || systemctl --no-block start gdm.service 2>/dev/null || true
 }
 
 # Echo the /dev/input/eventN belonging to the touchscreen, or return non-zero.

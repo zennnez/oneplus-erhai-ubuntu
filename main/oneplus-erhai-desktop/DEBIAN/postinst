@@ -74,7 +74,7 @@ if [ -d /run/systemd/system ]; then
 	for unit in erhai-desktop-gl.service \
 	            erhai-host-charge.service erhai-power-toggle.service \
 	            erhai-pogo-osk.service erhai-touchscreen.service \
-	            erhai-backlight.service erhai-greeter-brightness.service \
+	            erhai-backlight.service \
 	            erhai-rtc-sync.service erhai-bypass-charge.service; do
 		systemctl enable "$unit" >/dev/null 2>&1 || true
 	done
@@ -123,17 +123,6 @@ if [ -d /run/systemd/system ]; then
 	# and exits 0, so this is safe on older kernels too.
 	systemctl enable --now erhai-rtc-sync.timer >/dev/null 2>&1 || true
 	systemctl restart erhai-rtc-sync.service >/dev/null 2>&1 || true
-	# erhai: fixed backlight level for boot and the login screen.
-	#   * erhai-backlight.service one-shots the boot level (before gdm),
-	#   * erhai-greeter-brightness.py re-pins it whenever a greeter session
-	#     appears after a logout, and keeps it pinned while one is on screen.
-	# The backlight unit is deliberately NOT started here: it would change the
-	# level of a session that is already running.  The watcher changes nothing
-	# until a greeter session exists.  (restart, not `try-restart || start`:
-	# try-restart on an inactive-but-loaded unit SUCCEEDS as a no-op, so the
-	# start would never run on a first install.)
-	systemctl restart erhai-greeter-brightness.service \
-		>/dev/null 2>&1 || true
 	# The greeter's file-db (/var/lib/gdm3/greeter-dconf-defaults) is compiled by
 	# gdm's own ExecStartPre from /usr/share/gdm/dconf, which now carries
 	# 95-erhai-greeter (greeter session-name + GNOME ALS off).  Recompile it here
