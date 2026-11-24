@@ -62,6 +62,7 @@
 
 **System**
 * **dual-boot with Android**.
+* **Desktop Environments**: Both Ubuntu GNOME and [KDE Plasma 6](kde.md) are supported with native touch integration, on-screen keyboards, and independent rootfs builders.
 * **OTA (over-the-air) updates** of kernel and apps.
 * Four **performance profiles** (cold ~70°C / cool ~80°C / balanced ~90°C / performance ~100°C) in the quick
   settings lets you limit temperature of the pad.
@@ -95,4 +96,4 @@
 
 ---
 
-Back to [README](../README.md) · Next → [Credits](credits.md)
+Back to [README](../README.md) · [KDE Plasma 6 Guide](kde.md) · Next → [Credits](credits.md)

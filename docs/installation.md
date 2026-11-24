@@ -176,6 +176,15 @@ sudo snap install snap-store localsend telegram-desktop
 
 </details>
 
+## 5. Building Custom RootFS Images (GNOME / KDE)
+
+You can build rootfs images from source on an Ubuntu machine:
+
+* **Ubuntu GNOME**: `sudo ./build-root.sh resolute` (or `stonking`)
+* **KDE Plasma 6**: `sudo ./build-root-kde.sh resolute` (or `stonking`)
+
+Both builders run independently. See the [KDE Plasma 6 Guide](kde.md) for full details on KDE features, plasmoids, `erhai-ctl`, and hardware tweaks.
+
 ---
 
-Back to [README](../README.md) · Next → [Status](status.md)
+Back to [README](../README.md) · [KDE Plasma 6 Guide](kde.md) · Next → [Status](status.md)
