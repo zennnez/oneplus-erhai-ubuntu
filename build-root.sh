@@ -726,12 +726,19 @@ apt install -y i2c-tools libcamera-tools v4l-utils \\
 
 # Desktop selection: GNOME (default, upstream) or KDE (Plasma 6 Wayland + SDDM).
 if [ "$DESKTOP" = "kde" ]; then
-	apt install -y plasma-desktop sddm kde-standard
+	apt install -y plasma-desktop sddm kde-standard maliit-keyboard
 	echo "/usr/bin/sddm" > /etc/X11/default-display-manager || true
 	apt install -y ptyxis
 	apt purge -y gnome-terminal alacritty || true
 	apt purge -y gnome-snapshot || true
 	apt install -y firefox
+	# Move C++ stock plasmoid plugins to .so.orig so QML overlays take precedence
+	for applet in battery brightness manage-inputmethod; do
+		so="/usr/lib/aarch64-linux-gnu/qt6/plugins/plasma/applets/org.kde.plasma.${applet}.so"
+		if [ -f "$so" ]; then
+			mv -f "$so" "${so}.orig"
+		fi
+	done
 else
 	apt install -y ubuntu-desktop
 	apt install -y ptyxis

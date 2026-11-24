@@ -1,0 +1,21 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "zen"
+            }
+        ],
+        "Category": "Hardware Information",
+        "Description": "Hardware controls for OnePlus Pad 3: Thermal Profile, Bypass Charging, Torch & Sensors",
+        "Icon": "preferences-system-power-management",
+        "Id": "org.erhai.plasma.controls",
+        "Name": "Erhai Controls",
+        "Version": "1.0",
+        "Website": "https://github.com/TheMojoMan/oneplus-erhai-ubuntu"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-MainScript": "ui/main.qml",
+    "X-Plasma-NotificationArea": true,
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}
