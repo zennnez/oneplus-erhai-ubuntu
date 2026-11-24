@@ -18,5 +18,7 @@ VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 find "$SRC" -type d -exec chmod 755 {} \;
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_all.deb"
 
-ppa_copy "$DEB_DIR/${PKG}_${VER}_all.deb"
+if [ "${NO_PPA:-0}" != 1 ]; then
+	ppa_copy "$DEB_DIR/${PKG}_${VER}_all.deb"
+fi
 echo "built ${PKG}_${VER}_all.deb"

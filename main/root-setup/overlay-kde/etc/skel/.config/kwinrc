@@ -1,0 +1,17 @@
+[Desktops]
+Number=2
+Rows=1
+
+[TouchEdges]
+Bottom=ShowDesktop
+Left=DesktopGrid
+Right=Overview
+Top=Overview
+
+[Wayland]
+InputMethod=/usr/share/applications/org.kde.plasma.keyboard.custom.desktop
+VirtualKeyboardMode=2
+
+[Xwayland]
+Scale=1.5
+XwaylandEisNoPromptApps=xembedsniproxy

@@ -76,11 +76,27 @@ case "$SERIES" in
 	*)	echo "unknown series '$SERIES' (resolute|stonking)" >&2; exit 2 ;;
 esac
 
+DESKTOP="${DESKTOP:-gnome}"
+for arg in "$@"; do
+	case "$arg" in
+		--desktop=kde|--kde) DESKTOP="kde" ;;
+		--desktop=gnome|--gnome) DESKTOP="gnome" ;;
+	esac
+done
+
 case "$SERIES" in
 	resolute) VERSION="${ERHAI_VERSION:-26.04}"; DEF_BASE=../ubuntu-base.tar.gz
-	          DEF_IMG=../rootfs-resolute.img; DEF_ROOTDIR=../rootdir ;;
+	          if [ "$DESKTOP" = "kde" ]; then
+	              DEF_IMG=../rootfs-resolute-kde.img; DEF_ROOTDIR=../rootdir-resolute-kde
+	          else
+	              DEF_IMG=../rootfs-resolute.img; DEF_ROOTDIR=../rootdir
+	          fi ;;
 	stonking) VERSION="${ERHAI_VERSION:-26.10}"; DEF_BASE=../ubuntu-base-26.10.tar.gz
-	          DEF_IMG=../rootfs-stonking.img; DEF_ROOTDIR=../rootdir-stonking ;;
+	          if [ "$DESKTOP" = "kde" ]; then
+	              DEF_IMG=../rootfs-stonking-kde.img; DEF_ROOTDIR=../rootdir-stonking-kde
+	          else
+	              DEF_IMG=../rootfs-stonking.img; DEF_ROOTDIR=../rootdir-stonking
+	          fi ;;
 esac
 # The erhai patches of the Ubuntu desktop stack (mutter/GTK4/Mesa, the nautilus
 # and ptyxis divert overrides) only exist for the release they were built on:
@@ -248,6 +264,10 @@ if [ -d "$SETUP_SERIES/overlay" ]; then
 	echo "[build-root] $SERIES overlay on top of the shared one"
 	cp -a "$SETUP_SERIES/overlay/." "$ROOTDIR/"
 fi
+if [ "$DESKTOP" = "kde" ] && [ -d "$SETUP_MAIN/overlay-kde" ]; then
+	echo "[build-root] KDE overlay on top"
+	cp -a "$SETUP_MAIN/overlay-kde/." "$ROOTDIR/"
+fi
 # cp -a preserves the workspace ownership of the overlay (uid/gid >= 1000).
 # If those leak into the image, sandboxed system services (ProtectSystem=
 # strict + trimmed CapabilityBoundingSet => no CAP_DAC_OVERRIDE) get EACCES
@@ -300,6 +320,7 @@ chmod 755 "$ROOTDIR"/usr/local/sbin/erhai-*
 # sensor-MEMORY-2026-10-22.md §10 and the tools in tmp/keyring-test/).
 # PRESET_USER=0 images never autologin, so nothing is missing for them.
 
+if [ "$DESKTOP" = "gnome" ]; then
 # ------------------------------------------------- system shell extensions ---
 # GNOME Shell extensions that ship through the overlay (gnome-shell loads
 # /usr/share/gnome-shell/extensions/<uuid>/ for every user, exactly like
@@ -462,6 +483,7 @@ echo "[build-root] window snapping: magnetize payload present + enabled in the s
 chroot "$ROOTDIR" update-alternatives --install \
 	/usr/share/gnome-shell/gdm-theme.gresource gdm-theme.gresource \
 	/usr/share/gnome-shell/theme/erhai/gnome-shell-theme.gresource 100 >/dev/null
+fi
 
 # GDM greeter dconf: this script creates NO profile of its own.  The
 # oneplus-erhai-desktop deb ships /etc/dconf/profile/gdm (user-db:user +
@@ -702,25 +724,23 @@ apt install -y i2c-tools libcamera-tools v4l-utils \\
 # image analyzes with the helper's numpy backend / the app's own CPU metric
 # instead.  Same numbers, just more CPU: nothing extra to install here.
 
-# Desktop (KDE Plasma 6 Wayland + SDDM).
-apt install -y plasma-desktop sddm kde-standard
-# Ptyxis is the erhai terminal (ubuntu-desktop only RECOMMENDS it, and
-# xdg-terminal-exec is the indirection that selects it), so install it
-# explicitly.  gnome-terminal is deliberately NOT part of the image -- it was
-# installed here until 2026-10-17 and nothing needs it (ubuntu-desktop neither
-# depends nor recommends it); the purge below also cleans an image built on top
-# of an older base.  alacritty must not come back either.
-apt install -y ptyxis
-apt purge -y gnome-terminal alacritty || true
-# GNOME's camera app (gnome-snapshot -- the "Camera"/Snapshot app) comes in as a
-# RECOMMEND of ubuntu-desktop.  ErhaiCam (oneplus-erhai-erhaicam) is THE camera
-# app on this pad: it owns the sensors, the AE/AF buttons and the NPU
-# statistics.  Nothing depends on gnome-snapshot, so it goes; the absence guard
-# further down keeps it from coming back, and its app-grid position is dropped
-# from the dconf seed (root-setup-files/skel-dconf.txt).
-apt purge -y gnome-snapshot || true
-# Core browser only; third-party browsers (Brave/Chromium) excluded per configuration
-apt install -y firefox
+# Desktop selection: GNOME (default, upstream) or KDE (Plasma 6 Wayland + SDDM).
+if [ "$DESKTOP" = "kde" ]; then
+	apt install -y plasma-desktop sddm kde-standard
+	echo "/usr/bin/sddm" > /etc/X11/default-display-manager || true
+	apt install -y ptyxis
+	apt purge -y gnome-terminal alacritty || true
+	apt purge -y gnome-snapshot || true
+	apt install -y firefox
+else
+	apt install -y ubuntu-desktop
+	apt install -y ptyxis
+	apt purge -y gnome-terminal alacritty || true
+	apt purge -y gnome-snapshot || true
+	apt install -y firefox
+	apt install -y brave-browser || true
+	apt install -y chromium || true
+fi
 ${EXTRA_PACKAGES:+apt install -y $EXTRA_PACKAGES}
 
 apt upgrade -y
@@ -863,16 +883,29 @@ rm -f "$ROOTDIR/tmp/erhai-stage-packages.sh"
 
 test -f "$ROOTDIR/run/erhai-stage-packages-done" || {
 	echo "FATAL: chroot stage 'packages' did not complete" >&2; exit 1; }
-chroot "$ROOTDIR" dpkg -l ubuntu-desktop firefox brave-browser chromium ptyxis console-setup gnome-shell \
-	oneplus-erhai-linux-7.3 oneplus-erhai-firmware \
-	$PKGS_REPACK \
-	oneplus-erhai-audio oneplus-erhai-wifi oneplus-erhai-bluetooth \
-	oneplus-erhai-camera oneplus-erhai-erhaicam oneplus-erhai-desktop \
-	oneplus-erhai-thermal oneplus-erhai-video oneplus-erhai-torch \
-	oneplus-erhai-sensors oneplus-erhai-otg oneplus-erhai-pen \
-	oneplus-erhai-fastrpc oneplus-erhai-npu oneplus-erhai-llamacpp \
-	$PKGS_REPACK_EXTRA >/dev/null || {
-	echo "FATAL: required packages missing from rootfs" >&2; exit 1; }
+if [ "$DESKTOP" = "kde" ]; then
+	chroot "$ROOTDIR" dpkg -l plasma-desktop sddm kde-standard firefox ptyxis console-setup \
+		oneplus-erhai-linux-7.3 oneplus-erhai-firmware \
+		$PKGS_REPACK \
+		oneplus-erhai-audio oneplus-erhai-wifi oneplus-erhai-bluetooth \
+		oneplus-erhai-camera oneplus-erhai-erhaicam oneplus-erhai-desktop \
+		oneplus-erhai-thermal oneplus-erhai-video oneplus-erhai-torch \
+		oneplus-erhai-sensors oneplus-erhai-otg oneplus-erhai-pen \
+		oneplus-erhai-fastrpc oneplus-erhai-npu oneplus-erhai-llamacpp \
+		$PKGS_REPACK_EXTRA >/dev/null || {
+		echo "FATAL: required packages missing from rootfs" >&2; exit 1; }
+else
+	chroot "$ROOTDIR" dpkg -l ubuntu-desktop firefox brave-browser chromium ptyxis console-setup gnome-shell \
+		oneplus-erhai-linux-7.3 oneplus-erhai-firmware \
+		$PKGS_REPACK \
+		oneplus-erhai-audio oneplus-erhai-wifi oneplus-erhai-bluetooth \
+		oneplus-erhai-camera oneplus-erhai-erhaicam oneplus-erhai-desktop \
+		oneplus-erhai-thermal oneplus-erhai-video oneplus-erhai-torch \
+		oneplus-erhai-sensors oneplus-erhai-otg oneplus-erhai-pen \
+		oneplus-erhai-fastrpc oneplus-erhai-npu oneplus-erhai-llamacpp \
+		$PKGS_REPACK_EXTRA >/dev/null || {
+		echo "FATAL: required packages missing from rootfs" >&2; exit 1; }
+fi
 echo "[build-root] package set verified"
 
 # ...and the packages that must NOT be there.  gnome-terminal: ptyxis is the
@@ -1109,11 +1142,12 @@ systemctl disable erhai-folio-gate.service || true
 # DSP's one-shot shell load.
 systemctl disable hexagonrpcd-cdsp.service || true
 
-# gdm must NOT start on its own: the panel is in-cell, so touch only syncs to
+# Display manager must NOT start on its own: the panel is in-cell, so touch only syncs to
 # the display during a display-manager bring-up. erhai-touchscreen.service waits
-# for "boot firmware ready" and starts gdm itself.
+# for "boot firmware ready" and starts the display manager itself.
 systemctl disable gdm || true
 systemctl disable gdm3 || true
+systemctl disable sddm || true
 
 # systemd-mute-console blanks the framebuffer on this device.
 systemctl mask systemd-mute-console.socket || true
