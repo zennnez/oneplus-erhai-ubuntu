@@ -1,23 +1,31 @@
 [AC][Display]
-DimDisplayWhenIdle=false
-TurnOffDisplayWhenIdle=false
+DimDisplayIdleTimeoutSec=300
+DimDisplayWhenIdle=true
+TurnOffDisplayIdleTimeoutSec=600
+TurnOffDisplayWhenIdle=true
 
 [AC][SuspendAndShutdown]
 AutoSuspendAction=0
 PowerButtonAction=0
 
 [Battery][Display]
-DimDisplayWhenIdle=false
-TurnOffDisplayWhenIdle=false
+DimDisplayIdleTimeoutSec=120
+DimDisplayWhenIdle=true
+TurnOffDisplayIdleTimeoutSec=300
+TurnOffDisplayWhenIdle=true
 
 [Battery][SuspendAndShutdown]
-AutoSuspendAction=0
+AutoSuspendAction=1
+AutoSuspendIdleTimeoutSec=900
 PowerButtonAction=0
 
 [LowBattery][Display]
-DimDisplayWhenIdle=false
-TurnOffDisplayWhenIdle=false
+DimDisplayIdleTimeoutSec=60
+DimDisplayWhenIdle=true
+TurnOffDisplayIdleTimeoutSec=120
+TurnOffDisplayWhenIdle=true
 
 [LowBattery][SuspendAndShutdown]
-AutoSuspendAction=0
+AutoSuspendAction=1
+AutoSuspendIdleTimeoutSec=300
 PowerButtonAction=0

@@ -25,7 +25,6 @@ for kv in LIBVA_DRIVER_NAME=iris IRIS_VAAPI_AV1=1; do
 		printf '%s\n' "$kv" >>/etc/environment
 	fi
 done
-done
 
 if [ -d /run/systemd/system ]; then
 	if command -v dconf >/dev/null 2>&1; then

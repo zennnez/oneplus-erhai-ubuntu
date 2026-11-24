@@ -316,7 +316,11 @@ do_off() {
                     say "deep teardown: skipped - external display is connected"
                 else
                     say "deep teardown: entering deep power save (DPU/DSI teardown + GPU park)"
-                    run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms off >/dev/null 2>&1 || true
+                    if command -v kscreen-doctor >/dev/null 2>&1; then
+                        run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms off >/dev/null 2>&1 || true
+                    elif command -v gdbus >/dev/null 2>&1; then
+                        run_as_user "$USER_NAME" "$UID_N" "$GID_N" env XDG_RUNTIME_DIR="$RT" DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" timeout 5 gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver --method org.gnome.ScreenSaver.SetActive true >/dev/null 2>&1 || true
+                    fi
                     park_gpu
                     touch /run/erhai-deep-teardown.done
                     say "deep teardown: completed $(snap)"
@@ -348,8 +352,12 @@ do_on() {
 
     if [ "$deep_done" -eq 1 ]; then
         say "on: waking from deep teardown -> restoring DPMS and re-pinning GPU"
-        # 1. Restore KWin DPMS on
-        run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms on >/dev/null 2>&1 || true
+        # 1. Restore DPMS on
+        if command -v kscreen-doctor >/dev/null 2>&1; then
+            run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms on >/dev/null 2>&1 || true
+        elif command -v gdbus >/dev/null 2>&1; then
+            run_as_user "$USER_NAME" "$UID_N" "$GID_N" env XDG_RUNTIME_DIR="$RT" DBUS_SESSION_BUS_ADDRESS="unix:path=$RT/bus" timeout 5 gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/ScreenSaver --method org.gnome.ScreenSaver.SetActive false >/dev/null 2>&1 || true
+        fi
         # 2. Restore backlight
         "$TOGGLE" on
         # 3. Simulate user activity to wake greeter/session
