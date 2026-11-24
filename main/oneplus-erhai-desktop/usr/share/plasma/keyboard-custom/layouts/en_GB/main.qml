@@ -20,6 +20,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.VirtualKeyboard
 import QtQuick.VirtualKeyboard.Components
+import org.kde.plasma.keyboard.custom.lib 1.0
 
 KeyboardLayoutLoader {
     id: loader
@@ -40,6 +41,40 @@ KeyboardLayoutLoader {
     // Non-text key (Tab, Ctrl, F1, Home ...): drawn with the "function" key style
     component FKey: Key {
         functionKey: true
+    }
+
+    // Caps Lock key that toggles capitalization across the whole virtual keyboard
+    component CapsKey: Key {
+        key: Qt.Key_CapsLock
+        displayText: "Caps"
+        functionKey: true
+        noModifier: true
+        readonly property bool latched: InputContext.capsLockActive
+        highlighted: latched
+        onClicked: {
+            if (InputContext.priv && InputContext.priv.shiftHandler) {
+                var sh = InputContext.priv.shiftHandler;
+                sh.capsLockActive = !sh.capsLockActive;
+                if (!sh.capsLockActive) {
+                    sh.shiftActive = false;
+                }
+            }
+        }
+    }
+
+    // Latching modifier key (Alt, Ctrl, Meta) with visual latched feedback
+    component ModKey: Key {
+        property string modifier: "alt"
+        key: modifier === "ctrl" ? Qt.Key_Control : (modifier === "meta" ? Qt.Key_Meta : Qt.Key_Alt)
+        displayText: modifier === "ctrl" ? "Ctrl" : (modifier === "meta" ? "Meta" : "Alt")
+        functionKey: true
+        noModifier: true
+        readonly property bool latched: {
+            if (modifier === "ctrl") return Modifiers.ctrl;
+            if (modifier === "meta") return Modifiers.meta;
+            return Modifiers.alt;
+        }
+        highlighted: latched
     }
 
     // Key with a shifted symbol (digits, punctuation). Switches on the real Shift
@@ -136,7 +171,7 @@ KeyboardLayoutLoader {
 
             // Row 3: Caps a-l ; ' Enter | Lang . Hide   (175 + 900 + 200 + 225 = 1500)
             KeyboardRow {
-                FKey { key: Qt.Key_CapsLock; displayText: "Caps"; weight: 175 }
+                CapsKey { weight: 175 }
                 Key { key: Qt.Key_A; text: "a" }
                 Key { key: Qt.Key_S; text: "s" }
                 Key { key: Qt.Key_D; text: "d" }
@@ -178,14 +213,14 @@ KeyboardLayoutLoader {
             // Row 5: Ctrl Meta Alt Space Alt &123 Menu Ctrl | Left Down Right
             //        (3*125 + 625 + 4*125 = 1500)
             KeyboardRow {
-                FKey { key: Qt.Key_Control; displayText: "Ctrl"; weight: 125 }
-                FKey { key: Qt.Key_Meta; displayText: "Meta"; weight: 125 }
-                FKey { key: Qt.Key_Alt; displayText: "Alt"; weight: 125 }
+                ModKey { modifier: "ctrl"; weight: 125 }
+                ModKey { modifier: "meta"; weight: 125 }
+                ModKey { modifier: "alt"; weight: 125 }
                 SpaceKey { weight: 625 }
-                FKey { key: Qt.Key_Alt; displayText: "Alt"; weight: 125 }
+                ModKey { modifier: "alt"; weight: 125 }
                 SymbolModeKey { weight: 125 }
                 FKey { key: Qt.Key_Menu; displayText: "Menu"; weight: 125 }
-                FKey { key: Qt.Key_Control; displayText: "Ctrl"; weight: 125 }
+                ModKey { modifier: "ctrl"; weight: 125 }
                 FillerKey { weight: 25 }
                 FKey { key: Qt.Key_Left; displayText: "\u2190"; repeat: true }
                 FKey { key: Qt.Key_Down; displayText: "\u2193"; repeat: true }
@@ -278,8 +313,8 @@ KeyboardLayoutLoader {
 
             // Ctrl Alt Space  <  (Up/Down)  >  Enter  Hide   (150+150+450+100+100+100+150+100 = 1300)
             KeyboardRow {
-                FKey { key: Qt.Key_Control; displayText: "Ctrl"; weight: 150 }
-                FKey { key: Qt.Key_Alt; displayText: "Alt"; weight: 150 }
+                ModKey { modifier: "ctrl"; weight: 150 }
+                ModKey { modifier: "alt"; weight: 150 }
                 SpaceKey { weight: 450 }
                 FKey { key: Qt.Key_Left; displayText: "\u2190"; repeat: true }
                 KeyboardColumn {
@@ -335,7 +370,7 @@ KeyboardLayoutLoader {
                 FKey { key: Qt.Key_ScrollLock; displayText: "ScrLk" }
                 FKey { key: Qt.Key_Pause; displayText: "Pause" }
                 FKey { key: Qt.Key_Menu; displayText: "Menu" }
-                FKey { key: Qt.Key_CapsLock; displayText: "Caps" }
+                CapsKey { }
             }
 
             // ABC(3) <- Up Down -> Backspace(3) Enter(3)
@@ -357,9 +392,9 @@ KeyboardLayoutLoader {
             // Shift Ctrl Alt Meta Tab (2 each) + Language(3)
             KeyboardRow {
                 ShiftKey { weight: 200 }
-                FKey { key: Qt.Key_Control; displayText: "Ctrl"; weight: 200 }
-                FKey { key: Qt.Key_Alt; displayText: "Alt"; weight: 200 }
-                FKey { key: Qt.Key_Meta; displayText: "Meta"; weight: 200 }
+                ModKey { modifier: "ctrl"; weight: 200 }
+                ModKey { modifier: "alt"; weight: 200 }
+                ModKey { modifier: "meta"; weight: 200 }
                 FKey { key: Qt.Key_Tab; text: "\t"; displayText: "Tab"; weight: 200 }
                 ChangeLanguageKey { weight: 300 }
             }

@@ -27,6 +27,7 @@ db2855747b753f081499aa10594b47b5  etc/tmpfiles.d/erhai-mem-sleep.conf
 1c4e5826547b901d29c68073c9299a1c  etc/udev/rules.d/72-erhai-gpu-external.rules
 bef7da546eb5c50337fcb9695a2e1a47  etc/udev/rules.d/81-erhai-pogo-touchpad.rules
 3997d498709d8bea8f366fb236e72ccb  etc/udev/rules.d/99-nvt-touch-calibration.rules
+a12b1029c6e2328f800bfcd54eca842e  etc/udev/rules.d/99-uinput.rules
 6b0ea2547e8255ef839cc0b786077312  etc/xdg/powerdevilrc
 d350e69a271ba426282edfc8e333ce07  etc/xdg/QtProject/qtlogging.ini
 718b1f0b25103664e1853a0a32c2090b  usr/lib/aarch64-linux-gnu/qt6/qml/QtQuick/VirtualKeyboard/Styles/PlasmaBreezeCustom/style.qml
@@ -130,9 +131,9 @@ c1c19de31cc000f7e4fc7dd643dce632  usr/share/gnome-shell/extensions/workspace-isl
 14089f0f8bf1838f98d55b5059188cd7  usr/share/gnome-shell/extensions/workspace-islands@danielbernalo.github.io/workspacesView.js
 a9f1dd524f5b40187a792a41ea976bdc  usr/share/libinput/erhai-pogo.quirks
 7a647bc83512c34e05d96b0dc1b9ee9e  usr/share/oneplus-erhai-desktop/README.md
-371715dafb5241260f928fb62e7dde3e  usr/share/plasma/keyboard-custom/layouts/en_GB/main.qml
-371715dafb5241260f928fb62e7dde3e  usr/share/plasma/keyboard-custom/layouts/en_US/main.qml
-371715dafb5241260f928fb62e7dde3e  usr/share/plasma/keyboard-custom/layouts/fallback/main.qml
+89e9d1a868cc2cbf3dfdb82d30e4c9d3  usr/share/plasma/keyboard-custom/layouts/en_GB/main.qml
+89e9d1a868cc2cbf3dfdb82d30e4c9d3  usr/share/plasma/keyboard-custom/layouts/en_US/main.qml
+89e9d1a868cc2cbf3dfdb82d30e4c9d3  usr/share/plasma/keyboard-custom/layouts/fallback/main.qml
 900946bc7ae5e0cb1c913eab3b4c8972  usr/share/plasma/plasmoids/org.erhai.plasma.torch/contents/ui/main.qml
 179bafc0d349c2bfd680d4502faf8579  usr/share/plasma/plasmoids/org.erhai.plasma.torch/metadata.json
 0764892aba21c12c576602d669a63562  usr/share/plasma/plasmoids/org.kde.plasma.manage-inputmethod/contents/ui/main.qml

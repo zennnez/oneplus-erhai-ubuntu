@@ -64,7 +64,11 @@ for f in usr/local/sbin/erhai-user-groups.sh \
 	 usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf \
 	 usr/lib/systemd/user/wireplumber.service.d/50-erhai-session.conf \
 	 usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf \
-	 usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf; do
+	 usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf \
+	 etc/udev/rules.d/99-uinput.rules \
+	 usr/share/plasma/keyboard-custom/layouts/en_US/main.qml \
+	 usr/share/plasma/keyboard-custom/layouts/en_GB/main.qml \
+	 usr/share/plasma/keyboard-custom/layouts/fallback/main.qml; do
 	[ -f "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
 
