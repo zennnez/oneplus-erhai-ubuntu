@@ -630,6 +630,27 @@ let keycodes;
 let layouts;
 let currentMonitorId = 0;
 let extract_dir = GLib.get_user_cache_dir() + "/gjs-osk";
+
+/* [erhai 2026-11-08] Index into Main.layoutManager.monitors of the built-in
+ * panel, or 0 when it cannot be resolved.  The keyboard belongs on the internal
+ * display, never on an external one (owner rule): in extend mode GNOME 51 lists
+ * the external logical monitor first, so the old silent `currentMonitorId = 0`
+ * fallback put the OSK on the monitor. */
+function builtinMonitorIndex() {
+    try {
+        const monitorManager = global.backend.get_monitor_manager();
+        for (const monitor of monitorManager.get_monitors()) {
+            if (!monitor.is_builtin())
+                continue;
+            const index = monitorManager.get_monitor_for_connector(monitor.get_connector());
+            if (index >= 0 && index < Main.layoutManager.monitors.length)
+                return index;
+        }
+    } catch (e) {
+        logError(e, 'GJS-OSK: built-in monitor lookup');
+    }
+    return 0;
+}
 // [erhai] Momentary modifier keycodes (Shift/Ctrl/Alt/Super, both sides).  These
 // are the ones a user can also HOLD down with one finger while tapping another
 // key (multi-touch), the way a physical modifier behaves; CapsLock/NumLock are
@@ -1004,15 +1025,24 @@ export default class GjsOskExtension extends Extension {
                 }
                 if (!Object.keys(currentMonitorMap).includes(monitors.length + "")) {
                     let allConfigs = Object.keys(currentMonitorMap).map(Number.parseInt).sort();
-                    currentMonitorMap[monitors.length + ""] = allConfigs[allConfigs.length - 1];
+                    /* [erhai 2026-11-08] Upstream assigned the KEY of the last
+                     * configured count, not its VALUE: with a single "1:DSI-1"
+                     * entry this became the connector string "1",
+                     * get_monitor_for_connector() returned -1 and the OSK was put
+                     * on logical monitor 0 -- the external DP, which GNOME 51
+                     * lists first in extend mode. */
+                    currentMonitorMap[monitors.length + ""] =
+                        currentMonitorMap[allConfigs[allConfigs.length - 1] + ""] ?? "";
                 }
                 try {
                     currentMonitorId = global.backend.get_monitor_manager().get_monitor_for_connector(currentMonitorMap[monitors.length + ""]);
-                    if (currentMonitorId == -1) {
-                        currentMonitorId = 0;
-                    }
                 } catch {
-                    currentMonitorId = 0;
+                    currentMonitorId = -1;
+                }
+                if (currentMonitorId == -1) {
+                    /* [erhai] no usable configuration for this monitor count:
+                     * keep the keyboard on the built-in panel. */
+                    currentMonitorId = builtinMonitorIndex();
                 }
                 const fileExists = async (file) => {
                     try {
@@ -1722,12 +1752,13 @@ class Keyboard extends Dialog {
             let oskEdgeDragAction;
             if (EdgeDragAction != null) {
                 oskEdgeDragAction = new EdgeDragAction.EdgeDragAction(side, mode);
+                /* [erhai 2026-11-08] The bottom-edge swipe is an EXPLICIT
+                 * request for the keyboard and ignores the folio gate: the
+                 * folio stays "attached" even when it is folded behind the
+                 * tablet, and then the swipe was the only way to get the OSK
+                 * (the owner reported that it stopped working).  Only the
+                 * implicit auto-show paths stay gated. */
                 oskEdgeDragAction.connect('activated', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        this.gestureInProgress = false;
-                        return;
-                    }
                     this.open(true);
                     this.openedFromButton = true;
                     this.closedFromButton = false;
@@ -1743,10 +1774,6 @@ class Keyboard extends Dialog {
                     return Clutter.EVENT_PROPAGATE;
                 });
                 oskEdgeDragAction.connect('progress', (_action, progress) => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return;
-                    }
                     if (!this.gestureInProgress)
                         this.open(false)
                     this.setOpenState(Math.min(Math.max(0, (progress / (side % 2 == 0 ? this.box.height : this.box.width)) * 100), 100))
@@ -1761,19 +1788,14 @@ class Keyboard extends Dialog {
                     name: 'GJS-OSK Edge Drag Action',
                     side
                 })
+                /* [erhai 2026-11-08] See the EdgeDragAction branch above: the
+                 * deliberate bottom-edge swipe is not gated by the folio
+                 * keyboard, otherwise waving the OSK up while the folio is
+                 * folded behind the tablet does nothing. */
                 oskEdgeDragAction.connect('may-recognize', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate: no swipe
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return 0;
-                    }
                     return Shell.ActionMode.ALL & ~Shell.ActionMode.LOCK_SCREEN & Main.actionMode;
                 })
                 oskEdgeDragAction.connect('end', () => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        this.gestureInProgress = false;
-                        return;
-                    }
                     this.open(true);
                     this.openedFromButton = true;
                     this.closedFromButton = false;
@@ -1789,10 +1811,6 @@ class Keyboard extends Dialog {
                     return Clutter.EVENT_PROPAGATE;
                 });
                 oskEdgeDragAction.connect('progress', (_action, progress) => {
-                    if (pogoKeyboardAttached()) {   // [erhai] folio gate
-                        this.extensionObject?._folioGateNote('bottom-edge swipe');
-                        return;
-                    }
                     if (!this.gestureInProgress)
                         this.open(false)
                     this.setOpenState(Math.min(Math.max(0, (progress / (side % 2 == 0 ? this.box.height : this.box.width)) * 100), 100))

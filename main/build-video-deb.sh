@@ -47,14 +47,21 @@ chmod 644 "$SRC"/etc/udev/rules.d/*.rules "$SRC"/etc/environment.d/*.conf \
 	"$SRC"/etc/firefox/policies/policies.json "$SRC"/etc/chromium.d/* \
 	"$SRC"/etc/brave/policies/managed/*.json
 [ -f "$SRC/DEBIAN/postinst" ] && chmod 755 "$SRC/DEBIAN/postinst"
+# The Firefox kill switch is a wrapper: it must stay executable whatever the
+# working tree mode says (a 644 wrapper breaks `firefox` silently).
+[ -f "$SRC/usr/local/bin/firefox" ] && chmod 755 "$SRC/usr/local/bin/firefox"
+
+# personal data: no build path in the payload, no DWARF in the ELFs.  This must
+# run BEFORE the md5sums are taken -- stripping changes the file, and until
+# 1.13 the manifest was generated first, so `dpkg -V oneplus-erhai-video`
+# reported the shipped driver as modified on every install.
+ppa_scrub_debug "$SRC"
 
 # md5sums for every payload file (DEBIAN/ excluded).
 cd "$SRC"
 find etc usr -type f -exec md5sum {} \; > DEBIAN/md5sums
 cd "$HERE"
 
-# personal data: no build path in the payload, no DWARF in the ELFs
-ppa_scrub_debug "$SRC"
 dpkg-deb --build --root-owner-group "$SRC" "$DEB_DIR/${PKG}_${VER}_arm64.deb"
 
 # NO_PPA=1 builds locally without publishing (in-development iterations;

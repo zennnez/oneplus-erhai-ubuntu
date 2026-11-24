@@ -30,7 +30,7 @@
 #      ../update-ppa.sh --mvtomain (which moves every newer .deb from debs/
 #      into main/).
 #
-# Environment: BRANCH (default master or $1), NO_PULL=1 (skip step 2),
+# Environment: BRANCH (default erhai/7.3.4 or $1), NO_PULL=1 (skip step 2),
 #              JOBS, KERNEL_TREE, DEB_REV, PPA_DEB_DIR (see ppa-common.sh).
 #              NO_PPA is accepted but does nothing any more (the kernel deb is
 #              never published automatically).
@@ -61,7 +61,7 @@ KERNEL_REPO="${KERNEL_REPO:-https://github.com/themojoman/oneplus-erhai-linux.gi
 # not next to this builder -- $HERE/.. is the ubuntu repo, whose
 # oneplus-erhai-linux* dirs are the deb payload snapshots.
 KERNEL_TREE="${KERNEL_TREE:-$(dirname "$_PPA_COMMON_DIR")/oneplus-erhai-linux}"
-BRANCH="${BRANCH:-${1:-master}}"
+BRANCH="${BRANCH:-${1:-erhai/7.3.4}}"
 NO_PULL="${NO_PULL:-1}"
 JOBS="${JOBS:-$(nproc)}"
 
@@ -73,7 +73,7 @@ JOBS="${JOBS:-$(nproc)}"
 # counter exists; DEB_REV=<n> exported by the caller overrides it in both.
 
 # ------------------------------------------------------------------ source ---
-if [ ! -d "$KERNEL_TREE/.git" ]; then
+if [ ! -e "$KERNEL_TREE/.git" ]; then
 	echo "kernel tree $KERNEL_TREE not found -- cloning $KERNEL_REPO ($BRANCH)"
 	git clone --branch="$BRANCH" "$KERNEL_REPO" "$KERNEL_TREE"
 else
@@ -129,11 +129,19 @@ KVER="${INNER_NAME#*_}"; KVER="${KVER%+b*}"             # kernelrelease
 # Each erhai kernel LINE has its own frozen release string and its own stable
 # tag that must sit on HEAD before building, or scripts/setlocalversion appends
 # '+' and the case below rejects the build:
-#   7.3-rc5 line (branch 7.3-rc5, CURRENT)  -> 7.3.0-rc5-sm8750-themojoman  tag v7.3-rc5
-#   7.3-rc4 line (branch 7.3-rc4)           -> 7.3.0-rc4-sm8750-themojoman  tag v7.3-rc4
-#   7.3-rc2 line (branch linux-7.3)         -> 7.3.0-rc2-sm8750-themojoman  tag v7.3-rc2
-#   7.2 line     (branch linux-7.2)         -> 7.2.0-sm8750-themojoman      tag v7.2
+#   7.3.4 line   (branch erhai/7.3.4, CURRENT) -> 7.3.4-sm8750-themojoman
+#   7.3-rc5 line (branch 7.3-rc5, ARCHIVE)     -> 7.3.0-rc5-sm8750-themojoman  tag v7.3-rc5
+#   7.3-rc4 line (branch 7.3-rc4, ARCHIVE)     -> 7.3.0-rc4-sm8750-themojoman  tag v7.3-rc4
+#   7.3-rc2 line (branch linux-7.3, ARCHIVE)   -> 7.3.0-rc2-sm8750-themojoman  tag v7.3-rc2
+#   7.2 line     (branch linux-7.2, ARCHIVE)   -> 7.2.0-sm8750-themojoman      tag v7.2
+#
+# CONFIG_LOCALVERSION_AUTO is unset in erhai_defconfig and the tree's own
+# build-kernel.sh exports LOCALVERSION= (which suppresses setlocalversion's
+# "+"), so the 7.3.4 line needs no tag on HEAD at all: the release string is
+# VERSION.PATCHLEVEL.SUBLEVEL + CONFIG_LOCALVERSION.
 case "$KVER" in
+7.3.4-sm8750-themojoman)
+	TAG="" ;;
 7.3.0-rc5-sm8750-themojoman)
 	TAG=v7.3-rc5 ;;
 7.3.0-rc4-sm8750-themojoman)
@@ -144,17 +152,19 @@ case "$KVER" in
 	TAG=v7.2 ;;
 *)
 	echo "ERROR: kernelrelease '$KVER' is not a frozen erhai release." >&2
-	echo "       Expected 7.3.0-rc5-sm8750-themojoman (7.3-rc5 line)," >&2
+	echo "       Expected 7.3.4-sm8750-themojoman (7.3.4 line, CURRENT)," >&2
+	echo "                7.3.0-rc5-sm8750-themojoman (7.3-rc5 line)," >&2
 	echo "                7.3.0-rc4-sm8750-themojoman (7.3-rc4 line)," >&2
 	echo "                7.3.0-rc2-sm8750-themojoman (7.3-rc2 line)" >&2
 	echo "             or 7.2.0-sm8750-themojoman (7.2 line)." >&2
-	echo "       Commit kernel-tree edits and 'git tag -f -a <v7.3-rc5|v7.3-rc4|v7.3-rc2|v7.2> HEAD' first." >&2
+	echo "       A '-dirty'/'+' suffix means tracked tree edits are uncommitted." >&2
 	exit 1 ;;
 esac
-# TAG is the stable tag the line's release string depends on.  Check it here so
+# TAG is the stable tag the line's release string depends on (empty for the
+# 7.3.4 line, which does not need one).  For the archive lines, check it here so
 # the trap it guards against (an untagged HEAD -> kernelrelease '...+' -> the
 # case above aborts the build) is named with the exact command to run.
-if [ -d "$KERNEL_TREE/.git" ]; then
+if [ -d "$KERNEL_TREE/.git" ] && [ -n "$TAG" ]; then
 	HAVE_TAG="$(git -C "$KERNEL_TREE" describe --exact-match HEAD 2>/dev/null || true)"
 	[ "$HAVE_TAG" = "$TAG" ] || \
 		echo "NOTE: HEAD of $KERNEL_TREE is tagged '${HAVE_TAG:-nothing}', not '$TAG'." \

@@ -1,6 +1,11 @@
 # oneplus-erhai-mutter — the erhai patched Mutter library set
 
-Fixes a NULL dereference in Mutter's Wayland touch code that **crashed the whole
+Four source fixes in the compositor library, in
+`src/backends/native/meta-cursor-renderer-native.c` /
+`src/wayland/meta-wayland-touch.c` / `src/backends/meta-*.c` /
+`src/wayland/meta-wayland.c`:
+
+1. **A NULL dereference in Mutter's Wayland touch code** that **crashed the whole
 compositor** and looked like a "logout":
 
 * `touch_can_grab_surface()` (`src/wayland/meta-wayland-touch.c`) was the only use
@@ -18,10 +23,50 @@ compositor** and looked like a "logout":
   (`touch-drag-null-guard.patch`, applies cleanly to Ubuntu's
   `mutter 50.1-0ubuntu2.4` source with `patch -p1`).
 
+2. **The hardware cursor is disabled while an external monitor is active**
+   (`mutter-hw-cursor-external-monitor.patch`).  With the mirror design of
+   `mirror-MEMORY-2026-11-07.md` §18 the panel keeps its native 3392x2400 timing
+   and the DPU scales the desktop down to the sink, but its cursor pipe is a DMA
+   pipe without a scaler: the pointer is written 1:1 into the sink and showed up
+   ~2.2x too large (owner test 7).  Mutter's fallback is all-or-nothing (the
+   composited cursor is only painted when NO view has a hardware cursor, and the
+   cursor planes are enumerated at startup), so the driver cannot switch it off
+   for the rescaled CRTC alone.  The patch treats an **active** non-builtin
+   monitor like a hardware-cursor inhibitor: the compositor cursor is then
+   scaled with the rest of the desktop and is correct on both outputs.  With only
+   the built-in panel active the hardware cursor is kept, so pointer motion does
+   not wake the GPU (owner decision 2026-11-07).
+
+3. **The old primary flag is never cleared when the primary display changes**
+   (`mutter-primary-flag-reset.patch`).  `MetaLogicalMonitor.is_primary` is set
+   by `meta_logical_monitor_make_primary()` but a logical monitor object reused
+   by `meta_logical_monitor_update()` keeps it, so after switching the primary
+   display BOTH logical monitors are flagged primary.  `GetCurrentState()`
+   exports that state verbatim; gnome-control-center fills its **Primary
+   Display** combo from it and selects the last flagged monitor, so Settings
+   showed the wrong display as primary after one switch.  Mainline's fix is
+   backported: add `meta_logical_monitor_clear_primary()` and clear every
+   logical monitor before marking the new primary.
+
+4. **Frame callbacks are withheld from a visible surface**
+   (`mutter-frame-callback-visible.patch`, `src/wayland/meta-wayland.c`,
+   `emit_frame_callbacks_for_stage_view()`).  Stock Mutter skips the callbacks
+   of any surface that is not the stage view's "primary" one, without asking
+   whether the surface is visible at all.  A fullscreen video toplevel that is
+   not primary by that heuristic then waits for a `wl_callback.done` that never
+   arrives, stops committing, the compositor goes idle and the picture freezes
+   while decoding continues at full rate; a forced redraw (workspace switch)
+   revives it.  Seen on YouTube's VP9→AV1 switch in a 4K video, in Brave and
+   Chromium alike, and cured by this patch (owner test 2026-11-19,
+   `video-MEMORY-2026-11-19.md`).  The patch keeps the throttling, but only for
+   surfaces that are *effectively obscured*; everything visible gets its
+   callback.
+
 ## What ships
 
-Ubuntu-named packages, like the mesa `/usr` replacement — all at
-`<base>+erhai1` (currently `50.1-0ubuntu2.4+erhai1`):
+Ubuntu-named packages, like the mesa `/usr` replacement — released at
+`<base>+erhai3` (`50.1-0ubuntu2.5+erhai3`; `+erhai1` was the 2026-10 line,
+`+erhai2` was published and withdrawn), test builds at `<base>+erhai2-test-NN`:
 
 | package | contents |
 |---|---|
@@ -52,13 +97,24 @@ So the recipe is surgical: take Ubuntu's own deb, drop in the patched library,
 bump the `Version`, regenerate md5sums, repack — the Depends list stays
 byte-identical to Ubuntu's and no shlibdeps run is needed.  The patched, stripped
 library is therefore stored here as `libmutter-18.so.0.0.0.patched`
-(md5 **`fcb8a6c21a8d9820fc68b83b28dd2040`**); `build-mutter-deb.sh` verifies that
-md5 before packaging and also reports whether the guard instruction
-`cbz x2, 0x18d2c0` is at offset `0x18d208`.
+(md5 **`6bb6f47ec79e543be03dd887a0e50de6`**, 3 119 424 B); `build-mutter-deb.sh`
+verifies that md5 before packaging and refuses a library with a `/usr/local`
+path baked in (the prefix bug of `mirror-MEMORY-2026-11-07.md` §12).
 
 To rebuild it from source: `apt-get source mutter`, apply
-`touch-drag-null-guard.patch`, build with the env above, then
+`touch-drag-null-guard.patch`, `mutter-hw-cursor-external-monitor.patch`,
+`mutter-primary-flag-reset.patch` and `mutter-frame-callback-visible.patch`, then
+build with the user environment cleaned (`env -u PKG_CONFIG_PATH -u
+LD_LIBRARY_PATH`) and these options -- the prefix is NOT optional, meson's
+default `/usr/local` pointed the X11 frames helper at a path that does not exist:
 
+    meson setup build -Dprefix=/usr -Dsysconfdir=/etc -Dlocalstatedir=/var \
+                      -Doptimization=2 -Dtests=disabled -Dprofiler=false --buildtype=plain
+    ninja -C build
+
+Use `-Doptimization=2` (the checked-in artifact was built that way, 3 119 424 B
+stripped; a plain `-Dbuildtype=plain` setup without it produces a 4.2 MB
+`-O0`-ish library).
     objcopy --only-keep-debug src/libmutter-18.so.0.0.0 libmutter-18.debug
     strip --strip-unneeded   src/libmutter-18.so.0.0.0
 
@@ -69,13 +125,21 @@ match the patched library (its `Build-Ids:` are the unpatched build's).
 
 ## Build / publish
 
-    ./build-mutter-deb.sh                        # build + publish to the TESTING suite
+    ./build-mutter-deb.sh                        # build + publish into the resolute suite
     NO_PPA=1 ./build-mutter-deb.sh               # build locally only
     PPA_DEB_DIR="$PPA_MAIN_DEB_DIR" ./build-mutter-deb.sh    # straight to the public MAIN suite
     BASE=50.1-0ubuntu2.5 ./build-mutter-deb.sh   # after a new Ubuntu mutter update
 
 The pristine Ubuntu debs it packages are fetched from the archive (sha256-checked
 against the apt metadata) and kept in `rollback/` for offline rollback.
+
+Versioning: the current released line is **`+erhai3`** (built 2026-11-19 with the
+frame-callback fix; `+erhai1` was the 2026-10 line, `+erhai2` was published and
+withdrawn on 2026-11-07, mirror-MEMORY-2026-11-07.md §11).  A test build keeps
+the released line and adds `-test-NN` (`ERHAI_SUFFIX=+erhai3-test-01
+./build-mutter-deb.sh`); only the released build increments the number.  Builds
+made before the 2026-11-19 fix carry `+erhai2-test-NN` (they sort above the
+withdrawn `+erhai2`); a build must never be called `+erhai1-test-NN`.
 
 ## Rollback
 

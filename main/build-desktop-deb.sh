@@ -10,8 +10,7 @@
 # bring-up unit + rebind script, power-key REAL panel power cycle
 # (erhai-power-watch.py -> erhai-panel-power.sh), pogo attach ->
 # OSK unit, folio-fold watcher (+ its gate unit and the calibration probe),
-# greeter helpers, and the FIXED gjs-osk on-screen keyboard as a system-wide
-# GNOME Shell extension (see the gjs-osk block below).
+# greeter helpers, and the custom virtual keyboard layouts for KDE Plasma 6.
 # Staged into root-setup-files/packages/ for build-root.sh.
 set -euo pipefail
 
@@ -22,7 +21,48 @@ SETUP="$HERE/root-setup"
 PKG=$(awk '/^Package:/ {print $2}' "$SRC/DEBIAN/control")
 VER=$(awk '/^Version:/ {print $2}' "$SRC/DEBIAN/control")
 
-for f in usr/local/sbin/erhai-user-groups.sh 	 usr/local/sbin/erhai-keyring-unlock.sh 	 usr/local/sbin/erhai-touch-rebind.sh 	 usr/local/sbin/erhai-display-toggle.sh 	 usr/local/sbin/erhai-panel-power.sh 	 usr/local/sbin/erhai-panel-state-migrate.sh 	 usr/local/sbin/erhai-power-watch.py 	 usr/local/sbin/erhai-suspend-s2idle.sh 	 usr/local/sbin/erhai-suspend-wlan-guard.sh 	 etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf 	 usr/local/sbin/erhai-folio-fold.py 	 usr/local/sbin/erhai-folio-gate.sh 	 usr/local/sbin/erhai-folio-unblank.sh 	 usr/local/sbin/erhai-gpu-pin-once.sh 	 etc/systemd/system/erhai-gpu-pin-once.service 	 etc/erhai/gpu-pin.conf 	 etc/erhai/display.conf 	 etc/xdg/powerdevilrc 	 etc/xdg/QtProject/qtlogging.ini 	 usr/local/sbin/erhai-gpu-external-pin.sh 	 etc/udev/rules.d/72-erhai-gpu-external.rules 	 usr/local/sbin/erhai-folio-calibrate 	 usr/local/sbin/erhai-folio-probe.py 	 etc/udev/rules.d/71-erhai-folio-udev.rules 	 usr/local/sbin/erhai-backlight-fixed.sh 	 etc/systemd/system/erhai-backlight.service 	 usr/local/sbin/erhai-rtc-sync.py 	 etc/systemd/system/erhai-rtc-sync.service 	 etc/systemd/system/erhai-rtc-sync.timer 	 usr/local/sbin/erhai-bypass-charge.sh 	 etc/default/erhai-charge 	 etc/systemd/system/erhai-bypass-charge.service 	 etc/systemd/system/erhai-bypass-charge@.service 	 etc/polkit-1/rules.d/50-erhai-bypass-charge.rules 	 usr/share/oneplus-erhai-desktop/README.md 	 usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override 	 usr/local/sbin/erhai-audio-greeter-guard.sh 	 usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf 	 usr/lib/systemd/user/wireplumber.service.d/50-erhai-session.conf 	 usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf 	 usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf; do
+for f in usr/local/sbin/erhai-user-groups.sh \
+	 usr/local/sbin/erhai-keyring-unlock.sh \
+	 usr/local/sbin/erhai-touch-rebind.sh \
+	 usr/local/sbin/erhai-display-toggle.sh \
+	 usr/local/sbin/erhai-panel-power.sh \
+	 usr/local/sbin/erhai-panel-state-migrate.sh \
+	 usr/local/sbin/erhai-power-watch.py \
+	 usr/local/sbin/erhai-suspend-s2idle.sh \
+	 usr/local/sbin/erhai-suspend-wlan-guard.sh \
+	 etc/systemd/system/systemd-suspend.service.d/erhai-s2idle.conf \
+	 usr/local/sbin/erhai-folio-fold.py \
+	 usr/local/sbin/erhai-folio-gate.sh \
+	 usr/local/sbin/erhai-folio-unblank.sh \
+	 usr/local/sbin/erhai-gpu-pin-once.sh \
+	 etc/systemd/system/erhai-gpu-pin-once.service \
+	 etc/erhai/gpu-pin.conf \
+	 etc/erhai/display.conf \
+	 etc/xdg/powerdevilrc \
+	 etc/xdg/QtProject/qtlogging.ini \
+	 etc/environment.d/90-erhai-vaapi.conf \
+	 usr/local/sbin/erhai-gpu-external-pin.sh \
+	 etc/udev/rules.d/72-erhai-gpu-external.rules \
+	 usr/local/sbin/erhai-folio-calibrate \
+	 usr/local/sbin/erhai-folio-probe.py \
+	 etc/udev/rules.d/71-erhai-folio-udev.rules \
+	 usr/local/sbin/erhai-backlight-fixed.sh \
+	 etc/systemd/system/erhai-backlight.service \
+	 usr/local/sbin/erhai-rtc-sync.py \
+	 etc/systemd/system/erhai-rtc-sync.service \
+	 etc/systemd/system/erhai-rtc-sync.timer \
+	 usr/local/sbin/erhai-bypass-charge.sh \
+	 etc/default/erhai-charge \
+	 etc/systemd/system/erhai-bypass-charge.service \
+	 etc/systemd/system/erhai-bypass-charge@.service \
+	 etc/polkit-1/rules.d/50-erhai-bypass-charge.rules \
+	 usr/share/oneplus-erhai-desktop/README.md \
+	 usr/share/glib-2.0/schemas/99-erhai-no-gsd-ambient.gschema.override \
+	 usr/local/sbin/erhai-audio-greeter-guard.sh \
+	 usr/lib/systemd/user/pipewire.service.d/50-erhai-wait-greeter.conf \
+	 usr/lib/systemd/user/wireplumber.service.d/50-erhai-session.conf \
+	 usr/lib/systemd/user/pipewire-pulse.service.d/50-erhai-session.conf \
+	 usr/lib/systemd/user/filter-chain.service.d/50-erhai-session.conf; do
 	[ -f "$SRC/$f" ] || { echo "missing $f in $SRC" >&2; exit 1; }
 done
 
@@ -53,7 +93,7 @@ if [ -f "$SRC"/DEBIAN/postrm ]; then chmod 755 "$SRC"/DEBIAN/postrm; fi
 # everything in sbin/ is executable — .sh AND .py (pogo-osk regression 2026-09-09)
 find "$SRC/usr/local/sbin" -type f -exec chmod 755 {} \;
 # the rest of the payload is plain data (units, udev rules, dconf, schemas,
-# sounds, the gjs-osk tree): root:root 0644, never group-writable.
+# sounds, etc.): root:root 0644, never group-writable.
 find "$SRC" -type f ! -path "$SRC/DEBIAN/*" ! -path "$SRC/usr/local/sbin/*" \
 	-exec chmod 644 {} +
 

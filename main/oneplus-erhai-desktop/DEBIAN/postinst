@@ -2,10 +2,29 @@
 set -e
 
 # Clear any legacy diversions if previously installed
-for div in /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopGrid.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js            /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopIconItem.js; do
-    if dpkg-divert --list oneplus-erhai-desktop 2>/dev/null | grep -qF ""; then
-        dpkg-divert --package oneplus-erhai-desktop --remove --no-rename "" >/dev/null 2>&1 || true
+for div in /usr/share/gnome-shell/extensions/ubuntu-dock@ubuntu.com/dash.js \
+           /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopGrid.js \
+           /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopManager.js \
+           /usr/share/gnome-shell/extensions/ding@rastersoft.com/app/desktopIconItem.js; do
+    if dpkg-divert --list oneplus-erhai-desktop 2>/dev/null | grep -qF "$div"; then
+        dpkg-divert --package oneplus-erhai-desktop --remove --no-rename "$div" >/dev/null 2>&1 || true
     fi
+done
+
+# erhai: AV1 hardware decode environment (2.39).  The video stack only uses the
+# VPU when libva is told which driver to load and iris-vaapi is told to expose
+# AV1; the values used to exist on the development pad only, so an installed
+# image decoded everything in software.  The drop-in ships with this package
+# (systemd user sessions read environment.d), and the same two lines go into
+# /etc/environment for sessions that display managers start through PAM.  Existing values
+# are never overwritten -- a user who pinned a different driver keeps it.
+for kv in LIBVA_DRIVER_NAME=iris IRIS_VAAPI_AV1=1; do
+	key=${kv%%=*}
+	if [ -f /etc/environment ] &&
+	   ! grep -q "^[[:space:]]*${key}=" /etc/environment; then
+		printf '%s\n' "$kv" >>/etc/environment
+	fi
+done
 done
 
 if [ -d /run/systemd/system ]; then
