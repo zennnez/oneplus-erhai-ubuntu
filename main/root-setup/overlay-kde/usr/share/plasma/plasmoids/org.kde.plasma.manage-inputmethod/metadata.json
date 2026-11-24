@@ -1,0 +1,13 @@
+{
+    "KPlugin": {
+        "Id": "org.kde.plasma.manage-inputmethod",
+        "Name": "Virtual Keyboard",
+        "Description": "Manage and toggle on-screen virtual keyboard",
+        "Icon": "input-keyboard-virtual",
+        "Category": "Accessibility"
+    },
+    "KPackageStructure": "Plasma/Applet",
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": true,
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

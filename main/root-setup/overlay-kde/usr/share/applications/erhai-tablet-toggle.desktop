@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Toggle Tablet Mode
+Comment=Toggle KWin touch tablet mode on OnePlus Pad 3
+Exec=/usr/local/bin/erhai-ctl tabletmode toggle
+Icon=input-tablet
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+Keywords=tablet;touch;mode;orientation;
