@@ -123,11 +123,11 @@ Located at `/usr/bin/plasma-keyboard-custom`:
 * **PowerDevil Idle Timeouts**:
   * Display turns off after **5 minutes** on battery (**10 minutes** on AC).
   * System suspends (`s2idle`) after **10 minutes** on battery (**15 minutes** on AC).
-  * Lock on suspend is enabled by default; screen dimming is disabled.
+  * Screen locking (`kscreenlocker`) is completely disabled (`Autolock=false`, `LockOnResume=false`) to ensure users without a physical keyboard are never locked out.
 * **Suspend-to-Idle (`s2idle`)**:
   * Systemd configured via `/etc/systemd/sleep.conf.d/erhai-s2idle.conf` and `/etc/tmpfiles.d/erhai-mem-sleep.conf` to enforce hardware `s2idle` sleep.
-* **Clean Screen Blanking (`erhai-panel-power.sh`)**:
-  * `/usr/local/sbin/erhai-panel-power.sh` coordinates screen blanking and unblanking via `kscreen-doctor --dpms` and FreeDesktop ScreenSaver D-Bus interfaces without crashing compositor threads.
+* **Clean Screen Blanking & Idle Wake (`erhai-panel-power.sh`)**:
+  * `/usr/local/sbin/erhai-panel-power.sh` coordinates instantaneous backlight toggle, idle DPMS recovery via `kscreen-doctor --dpms`, and deferred GPU deep power-saving without locking the session. When display turns off due to inactivity, pressing the power button wakes the panel cleanly on the first press.
 * **Pogo Keyboard OSK Gatekeeper (`erhai-pogo-osk.py`)**:
   * Runs as a systemd service (`erhai-pogo-osk.service`).
   * Automatically disables the virtual keyboard when the physical magnetic keyboard is attached and re-enables it when detached.

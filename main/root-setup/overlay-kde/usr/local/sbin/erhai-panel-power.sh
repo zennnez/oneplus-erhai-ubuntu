@@ -121,6 +121,37 @@ state_is_blanked() { [ -e "$STATE" ]; }
 blank_is_dark() { [ "$(cat "$BL/actual_brightness" 2>/dev/null)" = 0 ]; }
 GENPD=/sys/kernel/debug/pm_genpd/pm_genpd_summary
 
+run_as_user() {   # $1 user, $2 uid, $3 gid, rest = command
+    local u=$1 uid=$2 gid=$3
+    shift 3
+    if [ "$(id -u)" = "$uid" ]; then
+        "$@"
+    elif command -v setpriv >/dev/null 2>&1 && [ "$(id -u)" = 0 ]; then
+        setpriv --reuid="$uid" --regid="$gid" --init-groups "$@"
+    else
+        runuser -u "$u" -- "$@"
+    fi
+}
+
+dpms_mode() {
+    if command -v kscreen-doctor >/dev/null 2>&1 && [ -S "$RT/wayland-0" ]; then
+        run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms show 2>/dev/null
+    fi
+}
+
+is_display_dark() {
+    [ -e "$STATE" ] && return 0
+    local bl
+    bl="$(cat "$BL/actual_brightness" 2>/dev/null)"
+    [ -n "$bl" ] && [ "$bl" -eq 0 ] && return 0
+    local mode
+    mode="$(dpms_mode)"
+    case "$mode" in
+        *": off"*) return 0 ;;
+    esac
+    return 1
+}
+
 # Ahead of everything else: a few hundred ms of work that must not queue behind
 # a compile/encode (owner 2026-10-22).  Children (the toggle, the click player)
 # inherit it; it dies with this script.  Best-effort: only root may renice.
@@ -161,15 +192,17 @@ snap() {
     fi
     printf 'bl=%s gpu=%s/%s gdsc[%s]\n' "$bl" "$gpu_c" "$gpu_r" "$gdsc"
 }
-ss_active() {   # ScreenSaver Lock (Clean & crash-proof without DRM DPMS teardown)
+ss_active() {   # FreeDesktop ScreenSaver API helper (no-lock on tablet)
     local val="$1"
     if [ -n "${ERHAI_SS_STUB:-}" ]; then "$ERHAI_SS_STUB" "$val"; return $?; fi
     [ -S "$RT/bus" ] || return 1
     if [ "$val" = "true" ]; then
-        # 1. Lock screen via FreeDesktop ScreenSaver API
-        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver Lock >/dev/null 2>&1 || true
+        # On KDE Plasma, org.freedesktop.ScreenSaver Lock must NEVER be called,
+        # as virtual keyboard cannot interact with kscreenlocker greeter.
+        # Screen blanking is handled via backlight and DPMS instead.
+        :
     else
-        # 2. Simulate user activity to wake greeter/session
+        # Simulate user activity to wake greeter/session
         busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
     fi
     return 0
@@ -339,7 +372,7 @@ do_on() {
     fi
     cancel_deep_teardown
 
-    state_is_blanked || { say "on: already on (no blank state)"; return 0; }
+    state_is_blanked || is_display_dark || { say "on: already on (no blank state)"; return 0; }
     local was; was=$(state_owner)
     say "on: restoring (state was ${was:-unknown}) bl=$(cat "$BL/actual_brightness" 2>/dev/null)"
     state_clear
@@ -350,8 +383,17 @@ do_on() {
         rm -f /run/erhai-deep-teardown.done
     fi
 
+    local dpms_off=0
     if [ "$deep_done" -eq 1 ]; then
-        say "on: waking from deep teardown -> restoring DPMS and re-pinning GPU"
+        dpms_off=1
+    else
+        case "$(dpms_mode)" in
+            *": off"*) dpms_off=1 ;;
+        esac
+    fi
+
+    if [ "$dpms_off" -eq 1 ]; then
+        say "on: waking from DPMS off / deep teardown -> restoring DPMS and re-pinning GPU"
         # 1. Restore DPMS on
         if command -v kscreen-doctor >/dev/null 2>&1; then
             run_as_user "$USER_NAME" "$UID_N" "$GID_N" env QT_QPA_PLATFORM=wayland WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR="$RT" kscreen-doctor --dpms on >/dev/null 2>&1 || true
@@ -361,7 +403,7 @@ do_on() {
         # 2. Restore backlight
         "$TOGGLE" on
         # 3. Simulate user activity to wake greeter/session
-        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+        ss_active false
         # 4. Re-pin GPU in background
         (
             echo "$$" > /run/erhai-async.pid
@@ -372,7 +414,7 @@ do_on() {
         # INSTANT CRITICAL PATH: DPU was never torn down (woken before delay)
         say "on: instant wake (< grace window) -> restoring backlight"
         "$TOGGLE" on
-        busctl --address="unix:path=$RT/bus" call org.freedesktop.ScreenSaver /ScreenSaver org.freedesktop.ScreenSaver SimulateUserActivity >/dev/null 2>&1 || true
+        ss_active false
         # Re-pin GPU if needed
         (
             echo "$$" > /run/erhai-async.pid
@@ -448,6 +490,6 @@ case "$ACTION" in
     off)      do_off ;;
     on)       do_on ;;
     reassert) reassert "${2:-}" ;;
-    toggle)   if [ -e "$STATE" ]; then do_on; else do_off; fi ;;
+    toggle)   if is_display_dark; then do_on; else do_off; fi ;;
     *) say "unknown action '$ACTION' (use on|off|toggle|reassert)"; exit 2 ;;
 esac
