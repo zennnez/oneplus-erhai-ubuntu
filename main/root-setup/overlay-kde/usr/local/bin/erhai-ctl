@@ -1,0 +1,763 @@
+#!/usr/bin/env python3
+"""
+erhai-ctl: Hardware control CLI and daemon interface for OnePlus Pad 3 (erhai).
+Provides controls for:
+  - Thermal Profiles (Performance, Balanced, Cool, Cold)
+  - Bypass Charging (State, current, adapter detection)
+  - Rear Flash / Torch (0-100% brightness)
+  - Auto-Brightness (erhai-alsd ambient sensor)
+  - Auto-Rotate (KScreen Wayland orientation policy)
+"""
+import glob
+import json
+import os
+import subprocess
+import sys
+
+STATE_THERMAL = "/etc/default/erhai-thermal"
+STATE_CHARGE = "/etc/default/erhai-charge"
+MAX_SOC_PARAM = "/sys/module/erhai_otg_glink/parameters/max_soc"
+PPS_SOC_STOP = "/sys/module/erhai_pps/parameters/pps_soc_stop"
+PPS_SOC_RESTART = "/sys/module/erhai_pps/parameters/pps_soc_restart"
+BATTERY_CAPACITY_NOMINAL_MAH = 12140
+LED_FLASH0 = "/sys/class/leds/white:flash-0"
+LED_FLASH1 = "/sys/class/leds/white:flash-1"
+MAX_SAFE_TORCH = 204  # 80% of 255 as defined by hardware limits
+
+
+def get_charge_cap():
+    try:
+        if os.path.exists(MAX_SOC_PARAM):
+            with open(MAX_SOC_PARAM, "r") as f:
+                val = int(f.read().strip())
+                if 50 <= val <= 100:
+                    return val
+    except Exception:
+        pass
+    try:
+        if os.path.exists(STATE_CHARGE):
+            with open(STATE_CHARGE, "r") as f:
+                for line in f:
+                    if line.startswith("ERHAI_MAX_SOC_SAVED="):
+                        val = int(line.split("=", 1)[1].strip())
+                        if 50 <= val <= 100:
+                            return val
+    except Exception:
+        pass
+    return 85
+
+
+def set_charge_cap(val):
+    if not (50 <= val <= 100):
+        print("Charge cap must be between 50 and 100", file=sys.stderr)
+        return False
+    success = False
+    try:
+        with open(MAX_SOC_PARAM, "w") as f:
+            f.write(f"{val}\n")
+        success = True
+    except Exception:
+        r = subprocess.run(["sudo", "/usr/local/sbin/erhai-bypass-charge.sh", "limit", str(val)], capture_output=True)
+        if r.returncode == 0:
+            success = True
+        else:
+            r2 = subprocess.run(["sudo", "bash", "-c", f"echo {val} > {MAX_SOC_PARAM}"], capture_output=True)
+            success = (r2.returncode == 0)
+
+    # Also update erhai_pps PPS fast charge stop and restart parameters if module is loaded
+    try:
+        restart_val = max(50, val - 5)
+        subprocess.run(["sudo", "bash", "-c", f"echo {val} > {PPS_SOC_STOP} 2>/dev/null; echo {restart_val} > {PPS_SOC_RESTART} 2>/dev/null"], capture_output=True)
+    except Exception:
+        pass
+
+    # Also update SC8547A dual charge pump max_soc (SuperVOOC)
+    try:
+        subprocess.run(["sudo", "bash", "-c", f"for f in /sys/kernel/debug/*-006f/max_soc; do echo {val} > \"$f\" 2>/dev/null; done"], capture_output=True)
+    except Exception:
+        pass
+
+    # Persist in STATE_CHARGE
+    try:
+        lines = []
+        found = False
+        if os.path.exists(STATE_CHARGE):
+            with open(STATE_CHARGE, "r") as f:
+                for line in f:
+                    if line.startswith("ERHAI_MAX_SOC_SAVED="):
+                        lines.append(f"ERHAI_MAX_SOC_SAVED={val}\n")
+                        found = True
+                    else:
+                        lines.append(line)
+        if not found:
+            lines.append(f"ERHAI_MAX_SOC_SAVED={val}\n")
+        tmp_path = f"/tmp/erhai-charge.{os.getpid()}"
+        with open(tmp_path, "w") as f:
+            f.writelines(lines)
+        subprocess.run(["sudo", "cp", tmp_path, STATE_CHARGE], capture_output=True)
+        subprocess.run(["rm", "-f", tmp_path], capture_output=True)
+    except Exception:
+        pass
+    return success
+
+
+def get_battery_times(soc, current_ma, online, bypass, cap):
+    """Calculate remaining discharge time or time to reach charge cap."""
+    health_str = "Good"
+    if bypass:
+        return 0, "Bypass active (Pack idle)", health_str
+
+    if online and soc >= cap:
+        return 0, f"Charged ({soc}%)", health_str
+
+    abs_cur = abs(current_ma)
+    if online:
+        if abs_cur < 80:
+            return 0, "Trickle charging", health_str
+        target = cap if cap < 100 else 100
+        if target <= soc:
+            return 0, "Fully charged", health_str
+        needed_mah = ((target - soc) / 100.0) * BATTERY_CAPACITY_NOMINAL_MAH
+        hours = needed_mah / abs_cur
+        secs = int(hours * 3600)
+        mins = max(1, int(round(secs / 60.0)))
+        if mins < 60:
+            rem_str = f"{mins} min to full"
+        else:
+            h = mins // 60
+            m = mins % 60
+            rem_str = f"{h}h {m}m to full" if m > 0 else f"{h}h to full"
+        return secs, rem_str, health_str
+    else:
+        if abs_cur < 80:
+            return 0, "Idle (> 20h remaining)", health_str
+        left_mah = (soc / 100.0) * BATTERY_CAPACITY_NOMINAL_MAH
+        hours = left_mah / abs_cur
+        secs = int(hours * 3600)
+        mins = max(1, int(round(secs / 60.0)))
+        if mins < 60:
+            rem_str = f"{mins} min remaining"
+        else:
+            h = mins // 60
+            m = mins % 60
+            rem_str = f"{h}h {m}m remaining" if m > 0 else f"{h}h remaining"
+        return secs, rem_str, health_str
+
+
+def get_tablet_mode():
+    r = subprocess.run(["systemctl", "is-active", "erhai-tablet-mode.service"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() == "active"
+
+
+def set_tablet_mode(enable):
+    act = "start" if enable else "stop"
+    r = subprocess.run(["sudo", "systemctl", act, "erhai-tablet-mode.service"])
+    return r.returncode == 0
+
+
+def get_thermal_profile():
+    profile = "performance"
+    try:
+        if os.path.exists(STATE_THERMAL):
+            with open(STATE_THERMAL, "r") as f:
+                for line in f:
+                    if line.startswith("ERHAI_THERMAL_PROFILE="):
+                        profile = line.split("=", 1)[1].strip()
+                        break
+    except Exception:
+        pass
+    aliases = {
+        "android": "performance", "stock": "performance", "perf": "performance",
+        "gaming": "cold", "100": "performance", "90": "balanced",
+        "80": "cool", "70": "cold"
+    }
+    return aliases.get(profile, profile)
+
+
+def set_thermal_profile(profile):
+    valid = ["performance", "balanced", "cool", "cold"]
+    if profile not in valid:
+        print(f"Invalid profile '{profile}'. Choose from: {', '.join(valid)}", file=sys.stderr)
+        return False
+    r = subprocess.run(["systemctl", "start", f"erhai-thermal@{profile}.service"])
+    return r.returncode == 0
+
+
+def get_bypass_state():
+    try:
+        if os.path.exists(STATE_CHARGE):
+            with open(STATE_CHARGE, "r") as f:
+                for line in f:
+                    if line.startswith("ERHAI_BYPASS_CHARGE="):
+                        return line.split("=", 1)[1].strip() == "1"
+    except Exception:
+        pass
+    return False
+
+
+def set_bypass_state(enable):
+    mode = "on" if enable else "off"
+    r = subprocess.run(["systemctl", "start", f"erhai-bypass-charge@{mode}.service"])
+    return r.returncode == 0
+
+
+def get_battery_info():
+    online = False
+    for p in glob.glob("/sys/class/power_supply/*/online"):
+        try:
+            with open(p, "r") as f:
+                if f.read().strip() == "1":
+                    online = True
+                    break
+        except Exception:
+            pass
+
+    soc = 100
+    cur_raw = 0
+    uvolts = 4000000
+    status = "Unknown"
+    for b in ["/sys/class/power_supply/erhai-adsp-bat", "/sys/class/power_supply/bq27z561-0"]:
+        if os.path.exists(b):
+            try:
+                with open(f"{b}/capacity", "r") as f:
+                    soc = int(f.read().strip())
+            except Exception:
+                pass
+            try:
+                with open(f"{b}/current_now", "r") as f:
+                    cur_raw = int(f.read().strip())
+            except Exception:
+                pass
+            try:
+                with open(f"{b}/voltage_now", "r") as f:
+                    uvolts = int(f.read().strip())
+            except Exception:
+                pass
+            try:
+                with open(f"{b}/status", "r") as f:
+                    status = f.read().strip()
+            except Exception:
+                pass
+            break
+
+    # Some drivers report uA, some mA
+    if abs(cur_raw) > 50000:
+        cur_ma = int(cur_raw / 1000.0)
+    else:
+        cur_ma = cur_raw
+
+    volts = uvolts / 1000000.0 if uvolts > 10000 else uvolts / 1000.0
+    amps = abs(cur_ma) / 1000.0
+    watts = round(amps * volts, 1)
+
+    return {
+        "online": online,
+        "soc": soc,
+        "current_ma": cur_ma,
+        "watts": watts,
+        "status": status
+    }
+
+
+def get_torch_level():
+    try:
+        if os.path.exists(f"{LED_FLASH0}/brightness"):
+            with open(f"{LED_FLASH0}/brightness", "r") as f:
+                raw = int(f.read().strip())
+                pct = int(round((raw / MAX_SAFE_TORCH) * 100))
+                return min(100, max(0, pct)), raw
+    except Exception:
+        pass
+    return 0, 0
+
+
+def set_torch_level(pct):
+    pct = max(0, min(100, pct))
+    raw = 0 if pct == 0 else int(round((pct / 100.0) * MAX_SAFE_TORCH))
+    for led in [LED_FLASH0, LED_FLASH1]:
+        path = f"{led}/brightness"
+        if os.path.exists(path):
+            try:
+                with open(path, "w") as f:
+                    f.write(str(raw))
+            except Exception as e:
+                print(f"Error writing to {path}: {e}", file=sys.stderr)
+                return False
+    return True
+
+
+def get_autobrightness():
+    cfg = os.path.expanduser("~/.config/kwinoutputconfig.json")
+    if os.path.exists(cfg):
+        try:
+            with open(cfg) as f:
+                data = json.load(f)
+            for entry in data:
+                if entry.get("name") == "outputs":
+                    for out in entry.get("data", []):
+                        if out.get("connectorName") == "DSI-1":
+                            return bool(out.get("automaticBrightness", False))
+        except Exception:
+            pass
+    try:
+        r = subprocess.run(["gsettings", "get", "org.erhai.sensors", "ambient-enabled"],
+                           capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout.strip().lower() == "true"
+    except Exception:
+        pass
+    return False
+
+
+def set_autobrightness(enable):
+    env = dict(os.environ)
+    if "WAYLAND_DISPLAY" not in env:
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    if "QT_QPA_PLATFORM" not in env:
+        env["QT_QPA_PLATFORM"] = "wayland"
+    if "XDG_RUNTIME_DIR" not in env:
+        uid = os.getuid()
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    act = "enable" if enable else "disable"
+    subprocess.run(["kscreen-doctor", f"output.DSI-1.autoBrightness.{act}"], env=env, capture_output=True)
+    val = "true" if enable else "false"
+    subprocess.run(["gsettings", "set", "org.erhai.sensors", "ambient-enabled", val], capture_output=True)
+    return True
+
+
+def get_autorotate():
+    env = dict(os.environ)
+    if "WAYLAND_DISPLAY" not in env:
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    if "XDG_RUNTIME_DIR" not in env:
+        uid = os.getuid()
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    try:
+        r = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, env=env)
+        if r.returncode == 0:
+            data = json.loads(r.stdout)
+            for out in data.get("outputs", []):
+                if out.get("name") == "DSI-1":
+                    # policy 0=never, 1=inTabletMode, 2=always
+                    policy = out.get("autoRotatePolicy", 0)
+                    return policy in (1, 2)
+    except Exception:
+        pass
+    return True
+
+
+def set_autorotate(enable):
+    env = dict(os.environ)
+    if "WAYLAND_DISPLAY" not in env:
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    if "XDG_RUNTIME_DIR" not in env:
+        uid = os.getuid()
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    policy = "always" if enable else "never"
+    r = subprocess.run(["kscreen-doctor", f"output.DSI-1.autoRotatePolicy.{policy}"],
+                       capture_output=True, env=env)
+    return r.returncode == 0
+
+
+def set_display_layout(mode="mirror"):
+    """
+    Configure external monitor layout:
+    - 'mirror': external display runs at native 16:9 full screen, DSI-1 mirrors it (zero black bars on monitor).
+    - 'extend': independent multi-monitor layout, external display primary.
+    """
+    env = dict(os.environ)
+    if "WAYLAND_DISPLAY" not in env:
+        env["WAYLAND_DISPLAY"] = "wayland-0"
+    if "XDG_RUNTIME_DIR" not in env:
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{os.getuid()}"
+    res = subprocess.run(["kscreen-doctor", "-j"], capture_output=True, text=True, env=env)
+    if res.returncode != 0:
+        print("Cannot query displays via kscreen-doctor", file=sys.stderr)
+        return False
+    try:
+        data = json.loads(res.stdout)
+        outputs = data.get("outputs", [])
+    except Exception:
+        return False
+
+    ext = next((o for o in outputs if o.get("name") != "DSI-1" and o.get("connected")), None)
+    if not ext:
+        print("No external display connected", file=sys.stderr)
+        return False
+
+    ext_name = ext["name"]
+    modes = ext.get("modes", [])
+    scale = float(ext.get("scale", 1.0) or 1.0)
+    preferred_ids = set(ext.get("preferredModes", []))
+    best_mode = None
+    if preferred_ids:
+        best_mode = next((m for m in modes if str(m.get("id")) in preferred_ids), None)
+    if not best_mode and modes:
+        best_mode = max(modes, key=lambda m: (m.get("size", {}).get("width", 0) * m.get("size", {}).get("height", 0), m.get("refreshRate", 0)))
+
+    mode_arg = [f"output.{ext_name}.mode.{best_mode['id']}"] if best_mode and "id" in best_mode else []
+    ext_width = 1920
+    if best_mode and "size" in best_mode:
+        ext_width = int(best_mode["size"].get("width", 1920) / scale)
+
+    # Step 1: always break any standing mirror first to prevent KWin Wayland rejection
+    subprocess.run(["kscreen-doctor", f"output.{ext_name}.mirror.none", "output.DSI-1.mirror.none"],
+                   capture_output=True, env=env)
+
+    if mode == "mirror":
+        # External display is primary and source; internal DSI-1 mirrors it
+        cmd = [
+            "kscreen-doctor",
+            f"output.{ext_name}.enable",
+            f"output.{ext_name}.priority.1",
+            f"output.{ext_name}.position.0,0"
+        ] + mode_arg + [
+            "output.DSI-1.enable",
+            f"output.DSI-1.mirror.{ext_name}"
+        ]
+    else:  # extend
+        cmd = [
+            "kscreen-doctor",
+            f"output.{ext_name}.enable",
+            f"output.{ext_name}.priority.1",
+            f"output.{ext_name}.position.0,0"
+        ] + mode_arg + [
+            "output.DSI-1.enable",
+            "output.DSI-1.priority.2",
+            f"output.DSI-1.position.{ext_width},0"
+        ]
+
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if r.returncode == 0:
+        print(f"Display mode '{mode}' applied with external display {ext_name}.")
+        return True
+    else:
+        print(f"Failed to apply display mode: {r.stderr}", file=sys.stderr)
+        return False
+
+
+def fit_replica_display():
+    return set_display_layout("mirror")
+
+
+def get_vk_status():
+    r = lambda c: subprocess.run(c, shell=True, capture_output=True, text=True).stdout.strip()
+    active_str = r("qdbus6 org.kde.KWin /VirtualKeyboard org.kde.kwin.VirtualKeyboard.active")
+    mode_str = r("qdbus6 org.kde.KWin /VirtualKeyboard org.kde.kwin.VirtualKeyboard.mode")
+    vis_str = r("qdbus6 org.kde.KWin /VirtualKeyboard org.kde.kwin.VirtualKeyboard.visible")
+    im = r("kreadconfig6 --file kwinrc --group Wayland --key InputMethod")
+
+    eng = "none"
+    eng_name = "None (Disabled)"
+    if "custom" in im:
+        eng = "plasma-custom"
+        eng_name = "Plasma Keyboard Custom"
+    elif "maliit" in im:
+        eng = "maliit"
+        eng_name = "Maliit Keyboard"
+    elif "plasma.keyboard" in im:
+        eng = "plasma"
+        eng_name = "Plasma Keyboard"
+
+    mode = int(mode_str) if mode_str.isdigit() else 0
+    active = (active_str == "true")
+    visible = (vis_str == "true")
+    enabled = (mode > 0 and eng != "none")
+
+    return {
+        "enabled": enabled,
+        "active": active,
+        "visible": visible,
+        "mode": mode,
+        "engine": eng,
+        "engine_name": eng_name,
+        "input_method": im
+    }
+
+
+def set_vk_enabled(enable: bool):
+    mode = 2 if enable else 0
+    subprocess.run(f"qdbus6 org.kde.KWin /VirtualKeyboard org.freedesktop.DBus.Properties.Set org.kde.kwin.VirtualKeyboard mode {mode}", shell=True, capture_output=True)
+    subprocess.run(f"kwriteconfig6 --file kwinrc --group Wayland --key VirtualKeyboardMode {mode}", shell=True, capture_output=True)
+    if not enable:
+        subprocess.run("qdbus6 org.kde.KWin /VirtualKeyboard org.freedesktop.DBus.Properties.Set org.kde.kwin.VirtualKeyboard active false", shell=True, capture_output=True)
+    else:
+        st = get_vk_status()
+        if st["engine"] == "none":
+            set_vk_engine("plasma-custom")
+        subprocess.run("qdbus6 org.kde.KWin /VirtualKeyboard org.freedesktop.DBus.Properties.Set org.kde.kwin.VirtualKeyboard active true", shell=True, capture_output=True)
+    return True
+
+
+def set_vk_engine(engine: str):
+    desktops = {
+        "plasma-custom": "/usr/share/applications/org.kde.plasma.keyboard.custom.desktop",
+        "maliit": "/usr/share/applications/com.github.maliit.keyboard.desktop",
+        "plasma": "/usr/share/applications/org.kde.plasma.keyboard.desktop",
+        "none": ""
+    }
+    if engine not in desktops:
+        return False
+    desktop = desktops[engine]
+    subprocess.run(f'kwriteconfig6 --file kwinrc --group Wayland --key InputMethod "{desktop}"', shell=True, capture_output=True)
+    if engine != "none":
+        subprocess.run('kwriteconfig6 --file kwinrc --group Wayland --key VirtualKeyboardMode 2', shell=True, capture_output=True)
+        subprocess.run("qdbus6 org.kde.KWin /VirtualKeyboard org.freedesktop.DBus.Properties.Set org.kde.kwin.VirtualKeyboard mode 2", shell=True, capture_output=True)
+    subprocess.run("qdbus6 org.kde.KWin /KWin org.kde.KWin.reconfigure", shell=True, capture_output=True)
+    return True
+
+
+def toggle_vk_visibility():
+    r = subprocess.run("for q in qdbus6 qdbus; do command -v $q >/dev/null && exec $q org.kde.kglobalaccel /component/org_kde_plasma_keyboard_custom org.kde.kglobalaccel.Component.invokeShortcut show-virtual-keyboard; done", shell=True, capture_output=True)
+    if r.returncode != 0:
+        subprocess.run("qdbus6 org.kde.KWin /VirtualKeyboard org.kde.kwin.VirtualKeyboard.forceActivate", shell=True, capture_output=True)
+    return True
+
+
+def get_fastchg_type():
+    for f in glob.glob("/sys/kernel/debug/*-006f/fastchg_state"):
+        try:
+            with open(f) as fp:
+                txt = fp.read()
+                if "state deliver" in txt:
+                    return "SuperVOOC"
+        except Exception:
+            pass
+    pps_f = "/sys/kernel/debug/erhai_pps/state"
+    if os.path.exists(pps_f):
+        try:
+            with open(pps_f) as fp:
+                txt = fp.read()
+                if "state charging" in txt or "cp on" in txt:
+                    return "PPS Fast Charge"
+        except Exception:
+            pass
+    return None
+
+
+def get_full_status():
+    thermal = get_thermal_profile()
+    bypass = get_bypass_state()
+    bat = get_battery_info()
+    cap = get_charge_cap()
+    rem_secs, rem_str, health_str = get_battery_times(bat["soc"], bat["current_ma"], bat["online"], bypass, cap)
+    torch_pct, torch_raw = get_torch_level()
+    autobrightness = get_autobrightness()
+    autorotate = get_autorotate()
+    tablet_mode = get_tablet_mode()
+    fastchg_type = get_fastchg_type()
+
+    # compute subtitle
+    if bypass:
+        if not bat["online"]:
+            bypass_sub = "Waiting for charger"
+        elif bat["watts"] < 0.8:
+            bypass_sub = "Adapter power only · Pack idle (0 W)"
+        else:
+            bypass_sub = f"Adapter power only · Pack {bat['watts']} W"
+    else:
+        if bat["online"]:
+            chg_title = fastchg_type if fastchg_type else "Charging"
+            bypass_sub = f"{chg_title} ({bat['watts']} W) · Battery {bat['soc']}% · Cap {cap}%"
+        else:
+            bypass_sub = f"Discharging ({bat['watts']} W) · Battery {bat['soc']}%"
+
+    return {
+        "thermal": thermal,
+        "bypass": bypass,
+        "bypass_status": bypass_sub,
+        "online": bat["online"],
+        "fastchg_type": fastchg_type,
+        "battery_soc": bat["soc"],
+        "battery_watts": bat["watts"],
+        "battery_current_ma": bat["current_ma"],
+        "charge_cap": cap,
+        "remaining_secs": rem_secs,
+        "remaining_str": rem_str,
+        "health_str": health_str,
+        "torch_pct": torch_pct,
+        "torch_on": torch_pct > 0,
+        "autobrightness": autobrightness,
+        "autorotate": autorotate,
+        "tablet_mode": tablet_mode,
+        "vk": get_vk_status(),
+    }
+
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print("Usage: erhai-ctl [json|status|thermal|bypass|charge-cap|tabletmode|torch|autobrightness|autorotate|vk|display (mirror|extend)|replica-fit] [value]")
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+
+    if cmd in ("json", "status-json"):
+        print(json.dumps(get_full_status()))
+        return
+
+    if cmd == "status":
+        st = get_full_status()
+        print(f"Thermal Profile:  {st['thermal']}")
+        print(f"Bypass Charging:  {'ON' if st['bypass'] else 'OFF'} ({st['bypass_status']})")
+        print(f"Charging Cap:     {st['charge_cap']}%")
+        print(f"Battery:          {st['battery_soc']}% ({st['battery_watts']} W, Adapter: {'Connected' if st['online'] else 'None'})")
+        print(f"Remaining:        {st['remaining_str']}")
+        print(f"Battery Health:   {st['health_str']}")
+        print(f"Tablet Mode:      {'ON' if st['tablet_mode'] else 'OFF'}")
+        print(f"Torch:            {st['torch_pct']}% ({'ON' if st['torch_on'] else 'OFF'})")
+        print(f"Auto-Brightness:  {'ON' if st['autobrightness'] else 'OFF'}")
+        print(f"Auto-Rotate:      {'ON' if st['autorotate'] else 'OFF'}")
+        print(f"Virtual Keyboard: {'ON' if st['vk']['enabled'] else 'OFF'} (Active: {st['vk']['active']}, Engine: {st['vk']['engine_name']})")
+        return
+
+    if cmd == "thermal":
+        if len(sys.argv) < 3:
+            print(get_thermal_profile())
+            return
+        arg = sys.argv[2].lower()
+        if set_thermal_profile(arg):
+            print(f"Thermal profile set to {arg}")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd == "bypass":
+        if len(sys.argv) < 3:
+            print("on" if get_bypass_state() else "off")
+            return
+        arg = sys.argv[2].lower()
+        enable = True if arg in ("1", "on", "true") else (False if arg in ("0", "off", "false") else not get_bypass_state())
+        if set_bypass_state(enable):
+            print(f"Bypass charging set to {'on' if enable else 'off'}")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd in ("charge-cap", "charge_cap", "cap", "limit"):
+        if len(sys.argv) < 3:
+            print(get_charge_cap())
+            return
+        try:
+            val = int(sys.argv[2])
+        except ValueError:
+            print("Invalid charge cap. Use a number like 60, 65, 70, 75, 80, 85, 90, 95, 100", file=sys.stderr)
+            sys.exit(2)
+        if set_charge_cap(val):
+            print(f"Charge cap set to {val}%")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd in ("tabletmode", "tablet-mode", "tablet"):
+        if len(sys.argv) < 3:
+            print("on" if get_tablet_mode() else "off")
+            return
+        arg = sys.argv[2].lower()
+        enable = True if arg in ("1", "on", "true") else (False if arg in ("0", "off", "false") else not get_tablet_mode())
+        if set_tablet_mode(enable):
+            print(f"Tablet mode set to {'on' if enable else 'off'}")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd in ("display", "screen"):
+        mode = sys.argv[2].lower() if len(sys.argv) >= 3 else "extend"
+        if mode in ("mirror", "replica", "clone"):
+            sys.exit(0 if set_display_layout("mirror") else 1)
+        else:
+            sys.exit(0 if set_display_layout("extend") else 1)
+
+    if cmd in ("replica-fit", "fit-display", "display-fit", "mirror"):
+        if set_display_layout("mirror"):
+            sys.exit(0)
+        sys.exit(1)
+
+    if cmd in ("extend", "display-extend"):
+        if set_display_layout("extend"):
+            sys.exit(0)
+        sys.exit(1)
+
+    if cmd == "torch":
+        if len(sys.argv) < 3:
+            pct, _ = get_torch_level()
+            print(f"{pct}%")
+            return
+        arg = sys.argv[2].lower()
+        if arg in ("on", "1"):
+            pct = 33
+        elif arg in ("off", "0"):
+            pct = 0
+        elif arg == "toggle":
+            curr, _ = get_torch_level()
+            pct = 0 if curr > 0 else 33
+        else:
+            try:
+                pct = int(arg)
+            except ValueError:
+                print("Invalid torch value. Use 0-100, on, off, or toggle", file=sys.stderr)
+                sys.exit(2)
+        if set_torch_level(pct):
+            print(f"Torch set to {pct}%")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd in ("autobrightness", "ambient"):
+        if len(sys.argv) < 3:
+            print("on" if get_autobrightness() else "off")
+            return
+        arg = sys.argv[2].lower()
+        enable = True if arg in ("1", "on", "true") else (False if arg in ("0", "off", "false") else not get_autobrightness())
+        if set_autobrightness(enable):
+            print(f"Auto-brightness set to {'on' if enable else 'off'}")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd == "autorotate":
+        if len(sys.argv) < 3:
+            print("on" if get_autorotate() else "off")
+            return
+        arg = sys.argv[2].lower()
+        enable = True if arg in ("1", "on", "true") else (False if arg in ("0", "off", "false") else not get_autorotate())
+        if set_autorotate(enable):
+            print(f"Auto-rotate set to {'on' if enable else 'off'}")
+        else:
+            sys.exit(1)
+        return
+
+    if cmd in ("vk", "virtualkeyboard", "keyboard", "osk"):
+        sub = sys.argv[2].lower() if len(sys.argv) > 2 else "status"
+        if sub in ("status", "json"):
+            print(json.dumps(get_vk_status()))
+            return
+        if sub in ("toggle", "show", "hide"):
+            toggle_vk_visibility()
+            print("Virtual keyboard visibility toggled")
+            return
+        if sub in ("enable", "on", "1"):
+            set_vk_enabled(True)
+            print("Virtual keyboard enabled")
+            return
+        if sub in ("disable", "off", "0"):
+            set_vk_enabled(False)
+            print("Virtual keyboard disabled")
+            return
+        if sub in ("engine", "switch") and len(sys.argv) > 3:
+            eng = sys.argv[3].lower()
+            if set_vk_engine(eng):
+                print(f"Virtual keyboard engine set to {eng}")
+            else:
+                print(f"Unknown engine: {eng}. Choose plasma-custom, maliit, plasma, or none", file=sys.stderr)
+                sys.exit(2)
+            return
+        print(json.dumps(get_vk_status()))
+        return
+
+    print(f"Unknown command: {cmd}", file=sys.stderr)
+    sys.exit(2)
+
+
+if __name__ == "__main__":
+    main()
